@@ -1,0 +1,16 @@
+-- note: since new-build does not yet support adding custom
+-- (non-alex/happy/etc) build tools to the path, you will have to do
+-- something like this before building:
+--
+-- export PATH=$PWD/dist-newstyle/build/x86_64-linux/ghc-7.10.3/hpb-0.1.1/c/hpb/build/hpb:$PATH
+
+packages:
+  copilot-verifier/
+
+optional-packages:
+  deps/crucible/crucible/
+  deps/crucible/crucible-llvm/
+  deps/crucible/crucible-symio/
+  deps/llvm-pretty/
+  deps/llvm-pretty-bc-parser/
+  deps/what4/what4/
