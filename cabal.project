@@ -8,6 +8,13 @@ packages:
   copilot-verifier/
 
 optional-packages:
+  deps/copilot/copilot/
+  deps/copilot/copilot-core/
+  deps/copilot/copilot-c99/
+  deps/copilot/copilot-language/
+  deps/copilot/copilot-theorem/
+  deps/crucible/crux/
+  deps/crucible/crux-llvm/
   deps/crucible/crucible/
   deps/crucible/crucible-llvm/
   deps/crucible/crucible-symio/

@@ -29,6 +29,11 @@ library
     bv-sized >= 1.0.0 && < 1.1,
     bytestring,
     containers >= 0.5.9.0,
+    copilot-c99 >= 3.5,
+    copilot-core >= 3.5,
+    copilot-theorem >= 3.5,
+    crux,
+    crux-llvm,
     lens,
     mtl,
     panic >= 0.3,
@@ -45,3 +50,21 @@ library
 
   exposed-modules:
     Copilot.Verifier  
+
+
+executable heater-verify
+  import: bldflags
+
+  hs-source-dirs: exe
+
+  build-depends:
+    base,
+    copilot,
+    copilot-c99,
+    copilot-core,
+    copilot-language,
+    copilot-verifier
+
+  main-is: Heater.hs
+
+  other-modules:
