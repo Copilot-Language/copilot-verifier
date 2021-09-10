@@ -32,6 +32,8 @@ library
     copilot-c99 >= 3.5,
     copilot-core >= 3.5,
     copilot-theorem >= 3.5,
+    crucible,
+    crucible-llvm,
     crux,
     crux-llvm,
     lens,
