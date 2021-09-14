@@ -37,6 +37,7 @@ library
     crux,
     crux-llvm,
     lens,
+    llvm-pretty,
     mtl,
     panic >= 0.3,
     parameterized-utils >= 1.0.8 && < 2.2,
