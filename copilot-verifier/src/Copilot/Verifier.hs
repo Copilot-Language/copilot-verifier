@@ -14,7 +14,9 @@ module Copilot.Verifier where
 
 import Control.Lens (view, (^.), to)
 import Control.Monad (foldM, forM_)
+import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State (execStateT, lift, StateT(..))
+import qualified Data.Text as Text
 
 import qualified Data.Map.Strict as Map
 import Data.IORef (newIORef, modifyIORef, IORef)
@@ -30,9 +32,11 @@ import qualified Copilot.Theorem.What4 as CW4
 
 import Data.Parameterized.Ctx (EmptyCtx)
 import Data.Parameterized.Context (pattern Empty)
+import qualified Data.Parameterized.Context as Ctx
 import Data.Parameterized.NatRepr (intValue, natValue, testEquality, knownNat, type (<=) )
 import Data.Parameterized.Nonce (globalNonceGenerator)
 import Data.Parameterized.Some (Some(..))
+import Data.Parameterized.TraversableFC (toListFC)
 
 import Lang.Crucible.Backend
   ( IsSymInterface, Goals(..), Assumptions, Assertion
@@ -42,24 +46,28 @@ import Lang.Crucible.Backend
   )
 import Lang.Crucible.Backend.Simple (newSimpleBackend)
 import Lang.Crucible.CFG.Core (AnyCFG(..), cfgArgTypes, cfgReturnType)
+import Lang.Crucible.CFG.Common ( freshGlobalVar )
 import Lang.Crucible.FunctionHandle (newHandleAllocator)
 import Lang.Crucible.Simulator
   ( SimContext(..), ctxSymInterface, ExecResult(..), ExecState(..)
   , defaultAbortHandler, runOverrideSim, partialValue, gpValue
   , GlobalVar, executeCrucible, OverrideSim, regValue
-  , readGlobal, callCFG, emptyRegMap
+  , readGlobal, writeGlobal, callCFG, emptyRegMap, RegEntry(..)
   )
+import Lang.Crucible.Simulator.GlobalState ( insertGlobal )
 import Lang.Crucible.Simulator.RegValue (RegValue)
 import Lang.Crucible.Simulator.SimError (SimError(..), SimErrorReason(..))
 import Lang.Crucible.Types
-  ( TypeRepr(..), (:~:)(..), KnownRepr(..) )
+  ( TypeRepr(..), (:~:)(..), KnownRepr(..), BoolType )
 
 import Lang.Crucible.LLVM (llvmGlobals, registerModuleFn, register_llvm_overrides)
 import Lang.Crucible.LLVM.Bytes (bitsToBytes)
 import Lang.Crucible.LLVM.DataLayout (DataLayout)
 import Lang.Crucible.LLVM.Extension (LLVM, ArchWidth)
 import Lang.Crucible.LLVM.Globals (initializeAllMemory, populateAllGlobals)
-import Lang.Crucible.LLVM.Intrinsics( IntrinsicsOptions )
+import Lang.Crucible.LLVM.Intrinsics
+  ( IntrinsicsOptions, OverrideTemplate, basic_llvm_override, LLVMOverride(..) )
+
 import Lang.Crucible.LLVM.MemType
   ( MemType(..)
   , i1, i8, i16, i32, i64
@@ -102,8 +110,10 @@ import What4.Config
 import What4.Interface
   ( Pred, bvLit, bvAdd, bvUrem, bvMul, bvIsNonzero, bvEq, isEq
   , getConfiguration, freshBoundedBV, predToBV
+  , getCurrentProgramLoc, printSymExpr
+  , truePred, falsePred, eqPred
   )
-import What4.Expr.Builder (FloatModeRepr(..), ExprBuilder)
+import What4.Expr.Builder (FloatModeRepr(..), ExprBuilder, BoolExpr, startCaching)
 import What4.ProgramLoc (ProgramLoc, mkProgramLoc, Position(..))
 import What4.Solver.Adapter (SolverAdapter(..))
 import What4.Solver.Z3 (z3Adapter)
@@ -120,7 +130,7 @@ verify csettings prefix spec =
      let cfg = cfgJoin cruxOptions llvmcfg
 
      (cruxOpts, llvmOpts) <-
-       do -- TODO, load from and actual configuration file
+       do -- TODO, load from and actual configuration file?
           fileOpts <- fromFile "copilot-verifier" cfg Nothing
           (cruxOpts0, llvmOpts0) <- foldM fromEnv fileOpts (cfgEnv cfg)
           let ?outputConfig = defaultOutputConfig cruxLogMessageToSayWhat (Just cruxOpts0)
@@ -145,6 +155,8 @@ verifyBitcode ::
 verifyBitcode csettings spec cruxOpts llvmOpts bcFile =
   do halloc <- newHandleAllocator
      sym <- newSimpleBackend FloatUninterpretedRepr globalNonceGenerator
+     -- turn on hash-consing
+     startCaching sym
      bbMapRef <- newIORef mempty
      let ?recordLLVMAnnotation = \an bb -> modifyIORef bbMapRef (Map.insert an bb)
      let ?outputConfig = defaultOutputConfig cruxLLVMLoggingToSayWhat (Just cruxOpts)
@@ -245,8 +257,18 @@ verifyStepBisimulation cruxOpts adapters csettings bbMapRef simctx llvmMod modTr
         mem' <- setupPrestate sym mem prfbundle
         -- sanity check, verify that we set up the memory in the expected relation
         assertStateRelation sym mem' (CW4.preStreamState prfbundle)
+
+        -- set up trigger guard global variables
+        let halloc = simHandleAllocator simctx
+        let prepTrigger (nm, guard, _) =
+              do gv <- freshGlobalVar halloc (Text.pack (nm ++ "_called")) BoolRepr
+                 return (nm, gv, guard)
+        triggerGlobals <- mapM prepTrigger (CW4.triggerState prfbundle)
+
         -- execute the step function
-        mem'' <- executeStep csettings simctx memVar mem' llvmMod modTrans
+        let overrides = zipWith triggerOverride triggerGlobals (CW4.triggerState prfbundle)
+        mem'' <- executeStep csettings simctx memVar mem' llvmMod modTrans triggerGlobals overrides
+
         -- assert the poststate is in the relation
         assertStateRelation sym mem'' (CW4.postStreamState prfbundle)
 
@@ -254,6 +276,60 @@ verifyStepBisimulation cruxOpts adapters csettings bbMapRef simctx llvmMod modTr
 
      putStrLn "Proving step bisimulation verification conditions"
      proveObls cruxOpts adapters bbMapRef simctx
+
+
+triggerOverride ::
+  IsSymInterface sym =>
+  sym ~ ExprBuilder t st fs =>
+  (?memOpts :: MemOptions) =>
+  (?lc :: TypeContext) =>
+  (?intrinsicsOpts :: IntrinsicsOptions) =>
+  (1 <= ArchWidth arch) =>
+  HasPtrWidth (ArchWidth arch) =>
+  HasLLVMAnn sym =>
+
+  (Name, GlobalVar BoolType, Pred sym) ->
+  (Name, BoolExpr t, [(Some Type, CW4.XExpr t)]) ->
+  OverrideTemplate (Crux sym) sym arch (RegEntry sym Mem) EmptyCtx Mem
+triggerOverride (_,triggerGlobal,_) (nm, _guard, args) = 
+   let args' = map toTypeRepr args in
+   case Ctx.fromList args' of
+     Some argCtx ->
+      basic_llvm_override $
+      LLVMOverride decl argCtx UnitRepr $
+        \_memOps sym calledArgs ->
+          do writeGlobal triggerGlobal (truePred sym)
+             liftIO $ checkArgs sym (toListFC Some calledArgs) (map snd args)
+             return ()
+       
+ where
+  decl = L.Declare
+         { L.decLinkage = Nothing
+         , L.decVisibility = Nothing
+         , L.decRetType = L.PrimType L.Void
+         , L.decName = L.Symbol nm
+         , L.decArgs = map llvmArgTy args
+         , L.decVarArgs = False
+         , L.decAttrs = []
+         , L.decComdat = Nothing
+         }
+
+  toTypeRepr (Some ctp, _) = llvmTypeAsRepr (copilotTypeToMemType (llvmDataLayout ?lc) ctp) Some
+  llvmArgTy (Some ctp, _) = copilotTypeToLLVMType ctp
+
+  checkArgs sym = loop (0::Integer)
+    where
+    loop i (x:xs) (v:vs) = checkArg sym i x v >> loop (i+1) xs vs
+    loop _ [] [] = return ()
+    loop _ _ _ = fail $ "Argument list mismatch in " ++ nm
+
+  checkArg sym i (Some (RegEntry tp v)) x =
+    do eq <- computeEqualVals sym x tp v
+       let shortmsg = "Trigger argument equality condition"
+       let longmsg  = "Trigger " ++ show nm ++ " argument " ++ show i
+       let rsn      = AssertFailureSimError shortmsg longmsg
+       loc <- getCurrentProgramLoc sym
+       addDurableProofObligation sym (LabeledPred eq (SimError loc rsn))
 
 
 executeStep :: forall sym arch.
@@ -271,10 +347,11 @@ executeStep :: forall sym arch.
   MemImpl sym ->
   L.Module ->
   ModuleTranslation arch ->
+  [(Name, GlobalVar BoolType, Pred sym)] ->
+  [OverrideTemplate (Crux sym) sym arch (RegEntry sym Mem) EmptyCtx Mem] ->
   IO (MemImpl sym)
-executeStep csettings simctx memVar mem llvmmod modTrans =
-  do let globSt = llvmGlobals memVar mem
-     let initSt = InitialState simctx globSt defaultAbortHandler memRepr $
+executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerOverrides =
+  do let initSt = InitialState simctx globSt defaultAbortHandler memRepr $
                     runOverrideSim memRepr runStep
      res <- executeCrucible [] initSt
      case res of
@@ -282,13 +359,16 @@ executeStep csettings simctx memVar mem llvmmod modTrans =
        AbortedResult{} -> fail "simulation aborted!"
        TimeoutResult{} -> fail "simulation timed out!"
  where
+  setupTrigger gs (_,gv,_) = insertGlobal gv (falsePred sym) gs
+  globSt = foldl setupTrigger (llvmGlobals memVar mem) triggerGlobals
   llvm_ctx = modTrans ^. transContext
   stepName = cSettingsStepFunctionName csettings
+  sym = simctx^.ctxSymInterface
 
-  runStep :: OverrideSim p sym LLVM rtp EmptyCtx Mem (MemImpl sym)
+  runStep :: OverrideSim (Crux sym) sym LLVM (RegEntry sym Mem) EmptyCtx Mem (MemImpl sym)
   runStep =
     do -- set up built-in functions
-       register_llvm_overrides llvmmod [] [] llvm_ctx
+       register_llvm_overrides llvmmod [] triggerOverrides llvm_ctx
        -- set up functions defined in the module
        mapM_ (registerModuleFn llvm_ctx) (Map.elems (cfgMap modTrans))
 
@@ -299,6 +379,15 @@ executeStep csettings simctx memVar mem llvmmod modTrans =
              (Empty, UnitRepr) -> regValue <$> callCFG anyCfg emptyRegMap
              _ -> fail $ unwords [show stepName, "should take no arguments and return void"]
          Nothing -> fail $ unwords ["Could not find step function named", show stepName]
+
+       forM_ triggerGlobals $ \(nm, gv, guard) ->
+         do guard' <- readGlobal gv
+            eq <- liftIO $ eqPred sym guard guard'
+            let shortmsg = "Trigger guard equality condition"
+            let longmsg  = "Trigger " ++ show nm
+            let rsn      = AssertFailureSimError shortmsg longmsg
+            let loc      = mkProgramLoc "<>" InternalPos
+            liftIO $ addDurableProofObligation sym (LabeledPred eq (SimError loc rsn))
 
        -- return the final state of the memory
        readGlobal memVar
@@ -556,6 +645,32 @@ copilotTypeToMemType dl = loop
       StructType (mkStructInfo dl False (map val (CT.toValues v)))
 
     val :: forall t. CT.Value t -> MemType
+    val (CT.Value tp _) = loop tp
+
+copilotTypeToLLVMType ::
+  CT.Type a ->
+  L.Type
+copilotTypeToLLVMType = loop
+  where
+    loop :: forall t. CT.Type t -> L.Type
+    loop CT.Bool   = L.PrimType (L.Integer 1)
+    loop CT.Int8   = L.PrimType (L.Integer 8)
+    loop CT.Int16  = L.PrimType (L.Integer 16)
+    loop CT.Int32  = L.PrimType (L.Integer 32)
+    loop CT.Int64  = L.PrimType (L.Integer 64)
+    loop CT.Word8  = L.PrimType (L.Integer 8) 
+    loop CT.Word16 = L.PrimType (L.Integer 16)
+    loop CT.Word32 = L.PrimType (L.Integer 32)
+    loop CT.Word64 = L.PrimType (L.Integer 64)
+    loop CT.Float  = L.PrimType (L.FloatType L.Float)
+    loop CT.Double = L.PrimType (L.FloatType L.Double)
+    loop t0@(CT.Array tp) =
+      let len = fromIntegral (tylength t0) in
+      L.Array len (loop tp)
+    loop (CT.Struct v) =
+      L.Struct (map val (CT.toValues v))
+
+    val :: forall t. CT.Value t -> L.Type
     val (CT.Value tp _) = loop tp
 
 
