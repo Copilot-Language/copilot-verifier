@@ -110,7 +110,7 @@ import What4.Config
 import What4.Interface
   ( Pred, bvLit, bvAdd, bvUrem, bvMul, bvIsNonzero, bvEq, isEq
   , getConfiguration, freshBoundedBV, predToBV
-  , getCurrentProgramLoc, printSymExpr
+  , getCurrentProgramLoc
   , truePred, falsePred, eqPred
   )
 import What4.Expr.Builder (FloatModeRepr(..), ExprBuilder, BoolExpr, startCaching)
@@ -135,8 +135,7 @@ verify csettings prefix spec =
           (cruxOpts0, llvmOpts0) <- foldM fromEnv fileOpts (cfgEnv cfg)
           let ?outputConfig = defaultOutputConfig cruxLogMessageToSayWhat (Just cruxOpts0)
           cruxOpts1 <- withCruxLogMessage (postprocessOptions cruxOpts0{ inputFiles = [csrc] })
-          processLLVMOptions (cruxOpts1, llvmOpts0)
-
+          processLLVMOptions (cruxOpts1, llvmOpts0{ optLevel = 1 })
 
      let ?outputConfig = defaultOutputConfig cruxLLVMLoggingToSayWhat (Just cruxOpts)
      bcFile <- withCruxLLVMLogging (genBitCode cruxOpts llvmOpts)
@@ -291,7 +290,7 @@ triggerOverride ::
   (Name, GlobalVar BoolType, Pred sym) ->
   (Name, BoolExpr t, [(Some Type, CW4.XExpr t)]) ->
   OverrideTemplate (Crux sym) sym arch (RegEntry sym Mem) EmptyCtx Mem
-triggerOverride (_,triggerGlobal,_) (nm, _guard, args) = 
+triggerOverride (_,triggerGlobal,_) (nm, _guard, args) =
    let args' = map toTypeRepr args in
    case Ctx.fromList args' of
      Some argCtx ->
@@ -301,7 +300,7 @@ triggerOverride (_,triggerGlobal,_) (nm, _guard, args) =
           do writeGlobal triggerGlobal (truePred sym)
              liftIO $ checkArgs sym (toListFC Some calledArgs) (map snd args)
              return ()
-       
+
  where
   decl = L.Declare
          { L.decLinkage = Nothing
@@ -414,7 +413,7 @@ setupPrestate sym mem0 prfbundle =
 
    setupExternalInput mem (nm, Some ctp, v) =
      do -- Compute LLVM/Crucible type information from the Copilot type
-        let memTy      = copilotTypeToMemType (llvmDataLayout ?lc) ctp
+        let memTy      = copilotTypeToMemType' (llvmDataLayout ?lc) ctp
         let typeAlign  = memTypeAlign (llvmDataLayout ?lc) memTy
         stType <- toStorableType memTy
         Some typeRepr <- return (llvmTypeAsRepr memTy Some)
@@ -426,6 +425,23 @@ setupPrestate sym mem0 prfbundle =
         regVal <- copilotExprToRegValue sym v typeRepr
         doStore sym mem ptrVal typeRepr stType typeAlign regVal
 
+   -- special case for length-1 buffers
+   setupStreamState mem (nm, Some ctp, [v]) =
+     do let bufName = "s" ++ show nm
+
+        -- Compute LLVM/Crucible type information from the Copilot type
+        let memTy      = copilotTypeToMemType' (llvmDataLayout ?lc) ctp
+        let typeAlign  = memTypeAlign (llvmDataLayout ?lc) memTy
+        stType <- toStorableType memTy
+        Some typeRepr <- return (llvmTypeAsRepr memTy Some)
+
+        -- Resolve the global names into base pointers
+        bufPtr <- doResolveGlobal sym mem (L.Symbol bufName)
+
+        -- Write the value into the buffer
+        regVal <- copilotExprToRegValue sym v typeRepr
+        doStore sym mem bufPtr typeRepr stType typeAlign regVal
+
    setupStreamState mem (nm, Some ctp, vs) =
      do -- TODO, should get these from somewhere inside copilot instead of building these names directly
         let idxName = "s" ++ show nm ++ "_idx"
@@ -433,7 +449,7 @@ setupPrestate sym mem0 prfbundle =
         let buflen  = genericLength vs :: Integer
 
         -- Compute LLVM/Crucible type information from the Copilot type
-        let memTy      = copilotTypeToMemType (llvmDataLayout ?lc) ctp
+        let memTy      = copilotTypeToMemType' (llvmDataLayout ?lc) ctp
         let typeLen    = memTypeSize (llvmDataLayout ?lc) memTy
         let typeAlign  = memTypeAlign (llvmDataLayout ?lc) memTy
         stType <- toStorableType memTy
@@ -490,6 +506,30 @@ assertStateRelation sym mem prfst =
    sizeTStorage :: StorageType
    sizeTStorage = bitvectorType (bitsToBytes (intValue ?ptrWidth))
 
+   -- specal case for length-1 buffers
+   assertStreamState (nm, Some ctp, [v]) =
+     do let bufName = "s" ++ show nm
+
+        -- Compute LLVM/Crucible type information from the Copilot type
+        let memTy      = copilotTypeToMemType' (llvmDataLayout ?lc) ctp
+        let typeAlign  = memTypeAlign (llvmDataLayout ?lc) memTy
+        stType <- toStorableType memTy
+        Some typeRepr <- return (llvmTypeAsRepr memTy Some)
+
+        -- Resolve the global names into base pointers
+        bufPtr <- doResolveGlobal sym mem (L.Symbol bufName)
+
+        -- Load the stream buffer value from memory
+        v' <- doLoad sym mem bufPtr stType typeRepr typeAlign
+
+        -- Assert that it is the expected value
+        eq <- computeEqualVals sym v typeRepr v'
+        let shortmsg = "State equality condition"
+        let longmsg  = "Stream " ++ show nm
+        let rsn      = AssertFailureSimError shortmsg longmsg
+        let loc      = mkProgramLoc "<>" InternalPos
+        addDurableProofObligation sym (LabeledPred eq (SimError loc rsn))
+
    assertStreamState (nm, Some ctp, vs) =
      do -- TODO, should get these from somewhere inside copilot instead of building these names directly
         let idxName = "s" ++ show nm ++ "_idx"
@@ -497,7 +537,7 @@ assertStateRelation sym mem prfst =
         let buflen  = genericLength vs :: Integer
 
         -- Compute LLVM/Crucible type information from the Copilot type
-        let memTy      = copilotTypeToMemType (llvmDataLayout ?lc) ctp
+        let memTy      = copilotTypeToMemType' (llvmDataLayout ?lc) ctp
         let typeLen    = memTypeSize (llvmDataLayout ?lc) memTy
         let typeAlign  = memTypeAlign (llvmDataLayout ?lc) memTy
         stType <- toStorableType memTy
@@ -547,6 +587,8 @@ copilotExprToRegValue sym = loop
 
     loop (CW4.XBool b) (LLVMPointerRepr w) | Just Refl <- testEquality w (knownNat @1) =
       llvmPointer_bv sym =<< predToBV sym b knownRepr
+    loop (CW4.XBool b) (LLVMPointerRepr w) | Just Refl <- testEquality w (knownNat @8) =
+      llvmPointer_bv sym =<< predToBV sym b knownRepr
     loop (CW4.XInt8 x) (LLVMPointerRepr w) | Just Refl <- testEquality w (knownNat @8) =
       llvmPointer_bv sym x
     loop (CW4.XInt16 x) (LLVMPointerRepr w) | Just Refl <- testEquality w (knownNat @16) =
@@ -590,6 +632,8 @@ computeEqualVals sym = loop
     loop :: forall tp'. CW4.XExpr t -> TypeRepr tp' -> RegValue sym tp' -> IO (Pred sym)
     loop (CW4.XBool b) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @1) =
       isEq sym b =<< bvIsNonzero sym =<< projectLLVM_bv sym v
+    loop (CW4.XBool b) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @8) =
+      isEq sym b =<< bvIsNonzero sym =<< projectLLVM_bv sym v
     loop (CW4.XInt8 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @8) =
       bvEq sym x =<< projectLLVM_bv sym v
     loop (CW4.XInt16 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @16) =
@@ -619,6 +663,13 @@ computeEqualVals sym = loop
 
     loop x tpr _v =
       fail $ unlines ["Mismatch between Copilot value and crucible value", show x, show tpr]
+
+copilotTypeToMemType' ::
+  DataLayout ->
+  CT.Type a ->
+  MemType
+copilotTypeToMemType' _dl CT.Bool = i8
+copilotTypeToMemType' dl tp = copilotTypeToMemType dl tp
 
 copilotTypeToMemType ::
   DataLayout ->
@@ -658,7 +709,7 @@ copilotTypeToLLVMType = loop
     loop CT.Int16  = L.PrimType (L.Integer 16)
     loop CT.Int32  = L.PrimType (L.Integer 32)
     loop CT.Int64  = L.PrimType (L.Integer 64)
-    loop CT.Word8  = L.PrimType (L.Integer 8) 
+    loop CT.Word8  = L.PrimType (L.Integer 8)
     loop CT.Word16 = L.PrimType (L.Integer 16)
     loop CT.Word32 = L.PrimType (L.Integer 32)
     loop CT.Word64 = L.PrimType (L.Integer 64)
