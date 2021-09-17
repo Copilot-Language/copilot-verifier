@@ -71,3 +71,20 @@ executable heater-verify
   main-is: Heater.hs
 
   other-modules:
+
+executable engine-verify
+  import: bldflags
+
+  hs-source-dirs: exe
+
+  build-depends:
+    base,
+    copilot,
+    copilot-c99,
+    copilot-core,
+    copilot-language,
+    copilot-verifier
+
+  main-is: Engine.hs
+
+  other-modules:
