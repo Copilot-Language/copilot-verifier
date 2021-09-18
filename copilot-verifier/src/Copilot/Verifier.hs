@@ -43,6 +43,7 @@ import Lang.Crucible.Backend
   , pushAssumptionFrame, popUntilAssumptionFrame
   , getProofObligations, clearProofObligations
   , LabeledPred(..), addDurableProofObligation
+  , addAssumption, CrucibleAssumption(..)
   )
 import Lang.Crucible.Backend.Simple (newSimpleBackend)
 import Lang.Crucible.CFG.Core (AnyCFG(..), cfgArgTypes, cfgReturnType)
@@ -110,7 +111,7 @@ import What4.Config
 import What4.Interface
   ( Pred, bvLit, bvAdd, bvUrem, bvMul, bvIsNonzero, bvEq, isEq
   , getConfiguration, freshBoundedBV, predToBV
-  , getCurrentProgramLoc
+  , getCurrentProgramLoc, printSymExpr
   , truePred, falsePred, eqPred
   )
 import What4.Expr.Builder (FloatModeRepr(..), ExprBuilder, BoolExpr, startCaching)
@@ -119,8 +120,8 @@ import What4.Solver.Adapter (SolverAdapter(..))
 import What4.Solver.Z3 (z3Adapter)
 import What4.Symbol (safeSymbol)
 
-verify :: CSettings -> String -> Spec -> IO ()
-verify csettings prefix spec =
+verify :: CSettings -> [String] -> String -> Spec -> IO ()
+verify csettings properties prefix spec =
   do compileWith csettings prefix spec
      putStrLn ("Generated " ++ prefix)
 
@@ -142,16 +143,17 @@ verify csettings prefix spec =
 
      putStrLn ("Compiled " ++ prefix ++ " into " ++ bcFile)
 
-     verifyBitcode csettings spec cruxOpts llvmOpts bcFile
+     verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile
 
 verifyBitcode ::
   CSettings ->
+  [String] ->
   Spec ->
   CruxOptions ->
   LLVMOptions ->
   FilePath ->
   IO ()
-verifyBitcode csettings spec cruxOpts llvmOpts bcFile =
+verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile =
   do halloc <- newHandleAllocator
      sym <- newSimpleBackend FloatUninterpretedRepr globalNonceGenerator
      -- turn on hash-consing
@@ -185,7 +187,8 @@ verifyBitcode csettings spec cruxOpts llvmOpts bcFile =
        do emptyMem   <- initializeAllMemory sym llvmCtxt llvmMod
           initialMem <- populateAllGlobals sym (globalInitMap trans) emptyMem
 
-          proofStateBundle <- CW4.computeBisimulationProofBundle sym spec
+          putStrLn "Generating proof state data"
+          proofStateBundle <- CW4.computeBisimulationProofBundle sym properties spec
 
           verifyInitialState cruxOpts adapters bbMapRef simctx initialMem
              (CW4.initialStreamState proofStateBundle)
@@ -254,6 +257,7 @@ verifyStepBisimulation cruxOpts adapters csettings bbMapRef simctx llvmMod modTr
 
      do -- set up the memory image
         mem' <- setupPrestate sym mem prfbundle
+
         -- sanity check, verify that we set up the memory in the expected relation
         assertStateRelation sym mem' (CW4.preStreamState prfbundle)
 
@@ -266,7 +270,7 @@ verifyStepBisimulation cruxOpts adapters csettings bbMapRef simctx llvmMod modTr
 
         -- execute the step function
         let overrides = zipWith triggerOverride triggerGlobals (CW4.triggerState prfbundle)
-        mem'' <- executeStep csettings simctx memVar mem' llvmMod modTrans triggerGlobals overrides
+        mem'' <- executeStep csettings simctx memVar mem' llvmMod modTrans triggerGlobals overrides (CW4.assumptions prfbundle)
 
         -- assert the poststate is in the relation
         assertStateRelation sym mem'' (CW4.postStreamState prfbundle)
@@ -324,8 +328,8 @@ triggerOverride (_,triggerGlobal,_) (nm, _guard, args) =
 
   checkArg sym i (Some (RegEntry tp v)) x =
     do eq <- computeEqualVals sym x tp v
-       let shortmsg = "Trigger argument equality condition"
-       let longmsg  = "Trigger " ++ show nm ++ " argument " ++ show i
+       let shortmsg = "Trigger " ++ show nm ++ " argument " ++ show i
+       let longmsg  = show (printSymExpr eq)
        let rsn      = AssertFailureSimError shortmsg longmsg
        loc <- getCurrentProgramLoc sym
        addDurableProofObligation sym (LabeledPred eq (SimError loc rsn))
@@ -348,8 +352,9 @@ executeStep :: forall sym arch.
   ModuleTranslation arch ->
   [(Name, GlobalVar BoolType, Pred sym)] ->
   [OverrideTemplate (Crux sym) sym arch (RegEntry sym Mem) EmptyCtx Mem] ->
+  [Pred sym] ->
   IO (MemImpl sym)
-executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerOverrides =
+executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerOverrides assums =
   do let initSt = InitialState simctx globSt defaultAbortHandler memRepr $
                     runOverrideSim memRepr runStep
      res <- executeCrucible [] initSt
@@ -364,12 +369,20 @@ executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerO
   stepName = cSettingsStepFunctionName csettings
   sym = simctx^.ctxSymInterface
 
+  dummyLoc = mkProgramLoc "<>" InternalPos
+
+  assumeProperty b =
+    addAssumption sym (GenericAssumption dummyLoc "Property assumption" b)
+
   runStep :: OverrideSim (Crux sym) sym LLVM (RegEntry sym Mem) EmptyCtx Mem (MemImpl sym)
   runStep =
     do -- set up built-in functions
        register_llvm_overrides llvmmod [] triggerOverrides llvm_ctx
        -- set up functions defined in the module
        mapM_ (registerModuleFn llvm_ctx) (Map.elems (cfgMap modTrans))
+
+       -- make any property assumptions
+       liftIO (mapM_ assumeProperty assums)
 
        -- look up and run the step function
        () <- case Map.lookup (L.Symbol stepName) (cfgMap modTrans) of
@@ -382,11 +395,10 @@ executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerO
        forM_ triggerGlobals $ \(nm, gv, guard) ->
          do guard' <- readGlobal gv
             eq <- liftIO $ eqPred sym guard guard'
-            let shortmsg = "Trigger guard equality condition"
-            let longmsg  = "Trigger " ++ show nm
+            let shortmsg = "Trigger guard equality condition: " ++ show nm
+            let longmsg  = show (printSymExpr eq)
             let rsn      = AssertFailureSimError shortmsg longmsg
-            let loc      = mkProgramLoc "<>" InternalPos
-            liftIO $ addDurableProofObligation sym (LabeledPred eq (SimError loc rsn))
+            liftIO $ addDurableProofObligation sym (LabeledPred eq (SimError dummyLoc rsn))
 
        -- return the final state of the memory
        readGlobal memVar
@@ -524,8 +536,8 @@ assertStateRelation sym mem prfst =
 
         -- Assert that it is the expected value
         eq <- computeEqualVals sym v typeRepr v'
-        let shortmsg = "State equality condition"
-        let longmsg  = "Stream " ++ show nm
+        let shortmsg = "State equality condition: " ++ show nm
+        let longmsg  = show (printSymExpr eq)
         let rsn      = AssertFailureSimError shortmsg longmsg
         let loc      = mkProgramLoc "<>" InternalPos
         addDurableProofObligation sym (LabeledPred eq (SimError loc rsn))
@@ -566,8 +578,8 @@ assertStateRelation sym mem prfst =
 
              v' <- doLoad sym mem ptrVal stType typeRepr typeAlign
              eq <- computeEqualVals sym v typeRepr v'
-             let shortmsg = "State equality condition"
-             let longmsg  = "Stream " ++ show nm ++ " index value " ++ show i
+             let shortmsg = "State equality condition: " ++ show nm ++ " index value " ++ show i
+             let longmsg  = show (printSymExpr eq)
              let rsn      = AssertFailureSimError shortmsg longmsg
              let loc      = mkProgramLoc "<>" InternalPos
              addDurableProofObligation sym (LabeledPred eq (SimError loc rsn))
