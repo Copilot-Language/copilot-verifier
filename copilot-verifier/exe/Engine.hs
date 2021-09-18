@@ -38,5 +38,5 @@ engineMonitor = do
   cooler = Just $ [True, True] P.++ repeat False
 
 main :: IO ()
-main = reify engineMonitor >>= verify mkDefaultCSettings "engine"
+main = reify engineMonitor >>= verify mkDefaultCSettings [] "engine"
 --main = interpret 10 engineMonitor

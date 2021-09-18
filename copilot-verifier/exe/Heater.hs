@@ -37,7 +37,7 @@ spec = do
 
 -- Compile the spec
 main :: IO ()
-main = reify spec >>= verify mkDefaultCSettings "heater"
+main = reify spec >>= verify mkDefaultCSettings [] "heater"
 {-
   do spec' <- reify spec
      putStrLn $ prettyPrintDot spec'

@@ -20,17 +20,17 @@ common bldflags
                -Wincomplete-uni-patterns
   ghc-prof-options: -O2 -fprof-auto-top
   default-language: Haskell2010
-
-
-library
-  import: bldflags
+  default-extensions:
+     NondecreasingIndentation
   build-depends:
     base >= 4.8 && < 4.15,
     bv-sized >= 1.0.0 && < 1.1,
     bytestring,
     containers >= 0.5.9.0,
+    copilot >= 3.5,
     copilot-c99 >= 3.5,
     copilot-core >= 3.5,
+    copilot-language >= 3.5,
     copilot-theorem >= 3.5,
     crucible,
     crucible-llvm,
@@ -46,45 +46,41 @@ library
     transformers,
     what4 >= 0.4
 
-  default-extensions:
-     NondecreasingIndentation
+library
+  import: bldflags
 
   hs-source-dirs: src
-
   exposed-modules:
-    Copilot.Verifier  
-
+    Copilot.Verifier
 
 executable heater-verify
   import: bldflags
 
   hs-source-dirs: exe
-
-  build-depends:
-    base,
-    copilot,
-    copilot-c99,
-    copilot-core,
-    copilot-language,
-    copilot-verifier
-
+  build-depends: copilot-verifier
   main-is: Heater.hs
-
   other-modules:
 
 executable engine-verify
   import: bldflags
 
   hs-source-dirs: exe
-
-  build-depends:
-    base,
-    copilot,
-    copilot-c99,
-    copilot-core,
-    copilot-language,
-    copilot-verifier
-
+  build-depends: copilot-verifier
   main-is: Engine.hs
+  other-modules:
 
+executable arith-verify
+  import: bldflags
+
+  hs-source-dirs: exe
+  build-depends: copilot-verifier
+  main-is: Arith.hs
+  other-modules:
+
+executable vote-verify
+  import: bldflags
+
+  hs-source-dirs: exe
+  build-depends: copilot-verifier
+  main-is: Voting.hs
   other-modules:
