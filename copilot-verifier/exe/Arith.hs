@@ -37,7 +37,7 @@ multRingSpec = do
   acc = [1] ++ unsafeCast ((cast acc * cast clamp) `mod` (cast lastPrime :: Stream Word64))
 
 main :: IO ()
-main = 
+main =
   do s <- reify multRingSpec
      r <- prove Z3 s
      print r

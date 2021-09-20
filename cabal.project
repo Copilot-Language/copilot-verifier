@@ -11,6 +11,7 @@ packages:
   deps/copilot/lib/copilot-core/
   deps/copilot/lib/copilot-c99/
   deps/copilot/lib/copilot-language/
+  deps/copilot/lib/copilot-libraries/
   deps/copilot/lib/copilot-theorem/
 
 optional-packages:

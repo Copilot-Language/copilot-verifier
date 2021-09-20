@@ -30,6 +30,7 @@ common bldflags
     copilot >= 3.5,
     copilot-c99 >= 3.5,
     copilot-core >= 3.5,
+    copilot-libraries >= 3.5,
     copilot-language >= 3.5,
     copilot-theorem >= 3.5,
     crucible,
@@ -83,4 +84,20 @@ executable vote-verify
   hs-source-dirs: exe
   build-depends: copilot-verifier
   main-is: Voting.hs
+  other-modules:
+
+executable clock-verify
+  import: bldflags
+
+  hs-source-dirs: exe
+  build-depends: copilot-verifier
+  main-is: Clock.hs
+  other-modules:
+
+executable counter-verify
+  import: bldflags
+
+  hs-source-dirs: exe
+  build-depends: copilot-verifier
+  main-is: Counter.hs
   other-modules:
