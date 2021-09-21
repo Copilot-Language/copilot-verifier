@@ -17,12 +17,12 @@ import Control.Monad (foldM, forM_)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State (execStateT, lift, StateT(..))
 import qualified Data.Text as Text
-
 import qualified Data.Map.Strict as Map
 import Data.IORef (newIORef, modifyIORef, IORef)
 import qualified Text.LLVM.AST as L
 import Data.List (genericLength)
 import qualified Data.BitVector.Sized as BV
+import System.FilePath ((</>))
 
 import Copilot.Compile.C99 (CSettings(..), compileWith)
 import Copilot.Core
@@ -120,27 +120,36 @@ import What4.Solver.Adapter (SolverAdapter(..))
 import What4.Solver.Z3 (z3Adapter)
 import What4.Symbol (safeSymbol)
 
+setOutput :: CruxOptions -> CSettings -> CSettings
+setOutput cruxOpts cin =
+  case cSettingsOutputDirectory cin of
+    Nothing -> cin{ cSettingsOutputDirectory = Just (outDir cruxOpts)  }
+    Just _  -> cin
+
 verify :: CSettings -> [String] -> String -> Spec -> IO ()
-verify csettings properties prefix spec =
-  do compileWith csettings prefix spec
-     putStrLn ("Generated " ++ prefix)
-
-     let csrc = prefix ++ ".c"
-
-     llvmcfg <- llvmCruxConfig
-     let cfg = cfgJoin cruxOptions llvmcfg
-
-     (cruxOpts, llvmOpts) <-
-       do -- TODO, load from and actual configuration file?
+verify csettings0 properties prefix spec =
+  do (cruxOpts, llvmOpts, csettings, csrc) <-
+       do llvmcfg <- llvmCruxConfig
+          let cfg = cfgJoin cruxOptions llvmcfg
+          -- TODO, load from and actual configuration file?
           fileOpts <- fromFile "copilot-verifier" cfg Nothing
           (cruxOpts0, llvmOpts0) <- foldM fromEnv fileOpts (cfgEnv cfg)
-          let ?outputConfig = defaultOutputConfig cruxLogMessageToSayWhat (Just cruxOpts0)
-          cruxOpts1 <- withCruxLogMessage (postprocessOptions cruxOpts0{ inputFiles = [csrc] })
-          processLLVMOptions (cruxOpts1, llvmOpts0{ optLevel = 1 })
+          let odir = case cSettingsOutputDirectory csettings0 of
+                       Just d -> d
+                       Nothing -> "results" </> prefix
+          let csettings = csettings0{ cSettingsOutputDirectory = Just odir }
+          let csrc = odir </> prefix ++ ".c"
+          let cruxOpts1 = cruxOpts0{ outDir = odir, bldDir = odir, inputFiles = [csrc] }
+          let ?outputConfig = defaultOutputConfig cruxLogMessageToSayWhat (Just cruxOpts1)
+          cruxOpts2 <- withCruxLogMessage (postprocessOptions cruxOpts1)
+          (cruxOpts3, llvmOpts2) <- processLLVMOptions (cruxOpts2, llvmOpts0{ optLevel = 1 })
+          return (cruxOpts3, llvmOpts2, csettings, csrc)
+
+     compileWith csettings prefix spec
+     putStrLn ("Generated " ++ show csrc)
 
      let ?outputConfig = defaultOutputConfig cruxLLVMLoggingToSayWhat (Just cruxOpts)
      bcFile <- withCruxLLVMLogging (genBitCode cruxOpts llvmOpts)
-
      putStrLn ("Compiled " ++ prefix ++ " into " ++ bcFile)
 
      verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile

@@ -37,6 +37,7 @@ common bldflags
     crucible-llvm,
     crux,
     crux-llvm,
+    filepath,
     lens,
     llvm-pretty,
     mtl,
