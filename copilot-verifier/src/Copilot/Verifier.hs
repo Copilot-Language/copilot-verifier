@@ -142,7 +142,7 @@ verify csettings0 properties prefix spec =
           let cruxOpts1 = cruxOpts0{ outDir = odir, bldDir = odir, inputFiles = [csrc] }
           let ?outputConfig = defaultOutputConfig cruxLogMessageToSayWhat (Just cruxOpts1)
           cruxOpts2 <- withCruxLogMessage (postprocessOptions cruxOpts1)
-          (cruxOpts3, llvmOpts2) <- processLLVMOptions (cruxOpts2, llvmOpts0{ optLevel = 1 })
+          (cruxOpts3, llvmOpts2) <- processLLVMOptions (cruxOpts2, llvmOpts0{ optLevel = 0 })
           return (cruxOpts3, llvmOpts2, csettings, csrc)
 
      compileWith csettings prefix spec
@@ -444,23 +444,6 @@ setupPrestate sym mem0 prfbundle =
         regVal <- copilotExprToRegValue sym v typeRepr
         doStore sym mem ptrVal typeRepr stType typeAlign regVal
 
-   -- special case for length-1 buffers
-   setupStreamState mem (nm, Some ctp, [v]) =
-     do let bufName = "s" ++ show nm
-
-        -- Compute LLVM/Crucible type information from the Copilot type
-        let memTy      = copilotTypeToMemType' (llvmDataLayout ?lc) ctp
-        let typeAlign  = memTypeAlign (llvmDataLayout ?lc) memTy
-        stType <- toStorableType memTy
-        Some typeRepr <- return (llvmTypeAsRepr memTy Some)
-
-        -- Resolve the global names into base pointers
-        bufPtr <- doResolveGlobal sym mem (L.Symbol bufName)
-
-        -- Write the value into the buffer
-        regVal <- copilotExprToRegValue sym v typeRepr
-        doStore sym mem bufPtr typeRepr stType typeAlign regVal
-
    setupStreamState mem (nm, Some ctp, vs) =
      do -- TODO, should get these from somewhere inside copilot instead of building these names directly
         let idxName = "s" ++ show nm ++ "_idx"
@@ -523,30 +506,6 @@ assertStateRelation sym mem prfst =
  where
    sizeTStorage :: StorageType
    sizeTStorage = bitvectorType (bitsToBytes (intValue ?ptrWidth))
-
-   -- specal case for length-1 buffers
-   assertStreamState (nm, Some ctp, [v]) =
-     do let bufName = "s" ++ show nm
-
-        -- Compute LLVM/Crucible type information from the Copilot type
-        let memTy      = copilotTypeToMemType' (llvmDataLayout ?lc) ctp
-        let typeAlign  = memTypeAlign (llvmDataLayout ?lc) memTy
-        stType <- toStorableType memTy
-        Some typeRepr <- return (llvmTypeAsRepr memTy Some)
-
-        -- Resolve the global names into base pointers
-        bufPtr <- doResolveGlobal sym mem (L.Symbol bufName)
-
-        -- Load the stream buffer value from memory
-        v' <- doLoad sym mem bufPtr stType typeRepr typeAlign
-
-        -- Assert that it is the expected value
-        eq <- computeEqualVals sym v typeRepr v'
-        let shortmsg = "State equality condition: " ++ show nm
-        let longmsg  = show (printSymExpr eq)
-        let rsn      = AssertFailureSimError shortmsg longmsg
-        let loc      = mkProgramLoc "<>" InternalPos
-        addDurableProofObligation sym (LabeledPred eq (SimError loc rsn))
 
    assertStreamState (nm, Some ctp, vs) =
      do -- TODO, should get these from somewhere inside copilot instead of building these names directly
