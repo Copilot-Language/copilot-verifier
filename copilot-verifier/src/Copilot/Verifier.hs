@@ -220,7 +220,7 @@ verifyInitialState ::
   IORef (LLVMAnnMap sym) ->
   SimCtxt Crux sym LLVM ->
   MemImpl sym ->
-  CW4.BisimulationProofState t ->
+  CW4.BisimulationProofState sym ->
   IO ()
 verifyInitialState cruxOpts adapters bbMapRef simctx mem initialState =
   do let sym = simctx^.ctxSymInterface
@@ -256,7 +256,7 @@ verifyStepBisimulation ::
   ModuleTranslation arch ->
   GlobalVar Mem ->
   MemImpl sym ->
-  CW4.BisimulationProofBundle t ->
+  CW4.BisimulationProofBundle sym ->
   IO ()
 verifyStepBisimulation cruxOpts adapters csettings bbMapRef simctx llvmMod modTrans memVar mem prfbundle =
   do let sym = simctx^.ctxSymInterface
@@ -292,7 +292,6 @@ verifyStepBisimulation cruxOpts adapters csettings bbMapRef simctx llvmMod modTr
 
 triggerOverride ::
   IsSymInterface sym =>
-  sym ~ ExprBuilder t st fs =>
   (?memOpts :: MemOptions) =>
   (?lc :: TypeContext) =>
   (?intrinsicsOpts :: IntrinsicsOptions) =>
@@ -301,7 +300,7 @@ triggerOverride ::
   HasLLVMAnn sym =>
 
   (Name, GlobalVar BoolType, Pred sym) ->
-  (Name, BoolExpr t, [(Some Type, CW4.XExpr t)]) ->
+  (Name, BoolExpr t, [(Some Type, CW4.XExpr sym)]) ->
   OverrideTemplate (Crux sym) sym arch (RegEntry sym Mem) EmptyCtx Mem
 triggerOverride (_,triggerGlobal,_) (nm, _guard, args) =
    let args' = map toTypeRepr args in
@@ -414,7 +413,6 @@ executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerO
 
 setupPrestate ::
   IsSymInterface sym =>
-  sym ~ ExprBuilder t st fs =>
   HasPtrWidth wptr =>
   HasLLVMAnn sym =>
   (?memOpts :: MemOptions) =>
@@ -422,7 +420,7 @@ setupPrestate ::
 
   sym ->
   MemImpl sym ->
-  CW4.BisimulationProofBundle t ->
+  CW4.BisimulationProofBundle sym ->
   IO (MemImpl sym)
 setupPrestate sym mem0 prfbundle =
   do mem' <- foldM setupStreamState mem0 (CW4.streamState (CW4.preStreamState prfbundle))
@@ -507,7 +505,6 @@ setupPrestate sym mem0 prfbundle =
 
 assertStateRelation ::
   IsSymInterface sym =>
-  sym ~ ExprBuilder t st fs =>
   HasPtrWidth wptr =>
   HasLLVMAnn sym =>
   (?memOpts :: MemOptions) =>
@@ -515,7 +512,7 @@ assertStateRelation ::
 
   sym ->
   MemImpl sym ->
-  CW4.BisimulationProofState t ->
+  CW4.BisimulationProofState sym ->
   IO ()
 assertStateRelation sym mem prfst =
   -- For each stream in the proof state, assert that the
@@ -595,16 +592,15 @@ assertStateRelation sym mem prfst =
 
         return ()
 
-copilotExprToRegValue :: forall sym t st fs tp.
+copilotExprToRegValue :: forall sym tp.
   IsSymInterface sym =>
-  sym ~ ExprBuilder t st fs =>
   sym ->
-  CW4.XExpr t ->
+  CW4.XExpr sym ->
   TypeRepr tp ->
   IO (RegValue sym tp)
 copilotExprToRegValue sym = loop
   where
-    loop :: forall tp'. CW4.XExpr t -> TypeRepr tp' -> IO (RegValue sym tp')
+    loop :: forall tp'. CW4.XExpr sym -> TypeRepr tp' -> IO (RegValue sym tp')
 
     loop (CW4.XBool b) (LLVMPointerRepr w) | Just Refl <- testEquality w (knownNat @1) =
       llvmPointer_bv sym =<< predToBV sym b knownRepr
@@ -640,17 +636,16 @@ copilotExprToRegValue sym = loop
       fail $ unlines ["Mismatch between Copilot value and crucible value", show x, show tpr]
 
 
-computeEqualVals :: forall sym t st fs tp.
+computeEqualVals :: forall sym tp.
   IsSymInterface sym =>
-  sym ~ ExprBuilder t st fs =>
   sym ->
-  CW4.XExpr t ->
+  CW4.XExpr sym ->
   TypeRepr tp ->
   RegValue sym tp ->
   IO (Pred sym)
 computeEqualVals sym = loop
   where
-    loop :: forall tp'. CW4.XExpr t -> TypeRepr tp' -> RegValue sym tp' -> IO (Pred sym)
+    loop :: forall tp'. CW4.XExpr sym -> TypeRepr tp' -> RegValue sym tp' -> IO (Pred sym)
     loop (CW4.XBool b) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @1) =
       isEq sym b =<< bvIsNonzero sym =<< projectLLVM_bv sym v
     loop (CW4.XBool b) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @8) =
