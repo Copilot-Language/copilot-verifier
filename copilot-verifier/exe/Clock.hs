@@ -10,7 +10,6 @@ module Main where
 import qualified Prelude as P
 
 import Language.Copilot
-import Copilot.Library.Clocks
 import Copilot.Compile.C99
 import Copilot.Verifier (verify)
 import Copilot.Theorem.What4 (prove, Solver(..))
