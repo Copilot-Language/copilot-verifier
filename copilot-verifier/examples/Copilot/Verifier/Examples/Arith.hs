@@ -1,7 +1,7 @@
 
 {-# LANGUAGE RebindableSyntax #-}
 
-module Main where
+module Copilot.Verifier.Examples.Arith where
 
 import Language.Copilot
 import Copilot.Compile.C99

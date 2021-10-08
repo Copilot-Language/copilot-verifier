@@ -6,7 +6,7 @@
 
 {-# LANGUAGE RebindableSyntax #-}
 
-module Main where
+module Copilot.Verifier.Examples.Counter where
 
 import Language.Copilot
 import Copilot.Compile.C99
