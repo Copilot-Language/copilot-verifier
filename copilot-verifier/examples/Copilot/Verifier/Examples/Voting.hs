@@ -6,7 +6,7 @@
 
 {-# LANGUAGE RebindableSyntax #-}
 
-module Main where
+module Copilot.Verifier.Examples.Voting where
 
 import Language.Copilot
 import Copilot.Compile.C99
@@ -25,7 +25,7 @@ vote = do
 
     -- 26 input streams to vote on
     inputs :: [Stream Word32]
-    inputs = [ a, b, c, d, e, f, g, h, i, j, k, l, m 
+    inputs = [ a, b, c, d, e, f, g, h, i, j, k, l, m
              -- , n, o, p, q, r, s, t, u, v, w, x, y, z
              ]
     a = [0] ++ a + 1
@@ -41,7 +41,7 @@ vote = do
     k = [1] ++ k + 1
     l = [1] ++ l + 1
     m = [1] ++ m + 1
-{-  
+{-
     n = [1] ++ n + 1
     o = [1] ++ o + 1
     p = [1] ++ p + 1

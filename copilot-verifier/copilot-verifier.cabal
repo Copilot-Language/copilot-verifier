@@ -55,50 +55,40 @@ library
   exposed-modules:
     Copilot.Verifier
 
-executable heater-verify
+library copilot-verifier-examples
+  import: bldflags
+
+  hs-source-dirs: examples
+  build-depends:
+    case-insensitive,
+    copilot-verifier
+  exposed-modules:
+    Copilot.Verifier.Examples
+    Copilot.Verifier.Examples.Arith
+    Copilot.Verifier.Examples.Clock
+    Copilot.Verifier.Examples.Counter
+    Copilot.Verifier.Examples.Engine
+    Copilot.Verifier.Examples.Heater
+    Copilot.Verifier.Examples.Voting
+
+executable verify-examples
   import: bldflags
 
   hs-source-dirs: exe
-  build-depends: copilot-verifier
-  main-is: Heater.hs
-  other-modules:
+  main-is: VerifyExamples.hs
+  build-depends:
+    case-insensitive,
+    copilot-verifier-examples,
+    optparse-applicative
 
-executable engine-verify
+test-suite copilot-verifier-test
   import: bldflags
 
-  hs-source-dirs: exe
-  build-depends: copilot-verifier
-  main-is: Engine.hs
-  other-modules:
-
-executable arith-verify
-  import: bldflags
-
-  hs-source-dirs: exe
-  build-depends: copilot-verifier
-  main-is: Arith.hs
-  other-modules:
-
-executable vote-verify
-  import: bldflags
-
-  hs-source-dirs: exe
-  build-depends: copilot-verifier
-  main-is: Voting.hs
-  other-modules:
-
-executable clock-verify
-  import: bldflags
-
-  hs-source-dirs: exe
-  build-depends: copilot-verifier
-  main-is: Clock.hs
-  other-modules:
-
-executable counter-verify
-  import: bldflags
-
-  hs-source-dirs: exe
-  build-depends: copilot-verifier
-  main-is: Counter.hs
-  other-modules:
+  type: exitcode-stdio-1.0
+  hs-source-dirs: test
+  build-depends:
+    case-insensitive,
+    copilot-verifier-examples,
+    tasty >= 0.10,
+    tasty-hunit >= 0.10
+  main-is: Test.hs

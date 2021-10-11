@@ -22,6 +22,7 @@ import Data.IORef (newIORef, modifyIORef, IORef)
 import qualified Text.LLVM.AST as L
 import Data.List (genericLength)
 import qualified Data.BitVector.Sized as BV
+import System.Exit (exitFailure)
 import System.FilePath ((</>))
 
 import Copilot.Compile.C99 (CSettings(..), compileWith)
@@ -725,12 +726,24 @@ presentResults ::
   (ProcessedGoals, Maybe (Goals (Assumptions sym) (Assertion sym, [ProgramLoc], ProofResult sym))) ->
   IO ()
 presentResults sym (num, goals)
-  | totalProcessedGoals num > 0 =
-      do putStrLn $ unwords ["Proved",show (provedGoals num), "of", show (totalProcessedGoals num), "total goals"]
+  | numTotalGoals == 0
+  = putStrLn $ "All obligations proved by concrete simplification"
+
+    -- All goals were proven
+  | numProvedGoals == numTotalGoals
+  = printGoals
+
+    -- There were some unproved goals, so fail with exit code 1
+  | otherwise
+  = do printGoals
+       exitFailure
+  where
+    numTotalGoals  = totalProcessedGoals num
+    numProvedGoals = provedGoals num
+
+    printGoals =
+      do putStrLn $ unwords ["Proved",show numProvedGoals, "of", show numTotalGoals, "total goals"]
          goals' <- provedGoalsTree sym goals
          case goals' of
            Just g -> logGoal g
            Nothing -> return ()
-
-  | otherwise =
-      putStrLn $ "All obligations proved by concrete simplification"
