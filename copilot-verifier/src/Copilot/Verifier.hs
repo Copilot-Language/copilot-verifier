@@ -105,7 +105,9 @@ import Crux.LLVM.Config (llvmCruxConfig, LLVMOptions(..))
 import Crux.LLVM.Compile (genBitCode)
 import Crux.LLVM.Simulate (setupSimCtxt, parseLLVM, explainFailure)
 import CruxLLVMMain
-  (withCruxLLVMLogging, cruxLLVMLoggingToSayWhat, processLLVMOptions)
+  ( CruxLLVMLogging, withCruxLLVMLogging
+  , cruxLLVMLoggingToSayWhat, processLLVMOptions
+  )
 
 import What4.Config
   (extendConfig)
@@ -141,7 +143,8 @@ verify csettings0 properties prefix spec =
           let csettings = csettings0{ cSettingsOutputDirectory = Just odir }
           let csrc = odir </> prefix ++ ".c"
           let cruxOpts1 = cruxOpts0{ outDir = odir, bldDir = odir, inputFiles = [csrc] }
-          let ?outputConfig = defaultOutputConfig cruxLogMessageToSayWhat (Just cruxOpts1)
+          ocfg <- defaultOutputConfig cruxLogMessageToSayWhat
+          let ?outputConfig = ocfg (Just cruxOpts1)
           cruxOpts2 <- withCruxLogMessage (postprocessOptions cruxOpts1)
           (cruxOpts3, llvmOpts2) <- processLLVMOptions (cruxOpts2, llvmOpts0{ optLevel = 0 })
           return (cruxOpts3, llvmOpts2, csettings, csrc)
@@ -149,13 +152,15 @@ verify csettings0 properties prefix spec =
      compileWith csettings prefix spec
      putStrLn ("Generated " ++ show csrc)
 
-     let ?outputConfig = defaultOutputConfig cruxLLVMLoggingToSayWhat (Just cruxOpts)
+     ocfg <- defaultOutputConfig cruxLLVMLoggingToSayWhat
+     let ?outputConfig = ocfg (Just cruxOpts)
      bcFile <- withCruxLLVMLogging (genBitCode cruxOpts llvmOpts)
      putStrLn ("Compiled " ++ prefix ++ " into " ++ bcFile)
 
      verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile
 
 verifyBitcode ::
+  Logs CruxLLVMLogging =>
   CSettings ->
   [String] ->
   Spec ->
@@ -170,7 +175,6 @@ verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile =
      startCaching sym
      bbMapRef <- newIORef mempty
      let ?recordLLVMAnnotation = \an bb -> modifyIORef bbMapRef (Map.insert an bb)
-     let ?outputConfig = defaultOutputConfig cruxLLVMLoggingToSayWhat (Just cruxOpts)
 
      let adapters = [z3Adapter] -- TODO? configurable
      extendConfig (solver_adapter_config_options z3Adapter) (getConfiguration sym)
@@ -181,8 +185,9 @@ verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile =
                   { printHandle = view outputHandle ?outputConfig }
 
      llvmMod <- parseLLVM bcFile
-     Some trans <- let ?transOpts = transOpts llvmOpts
-                    in translateModule halloc memVar llvmMod
+     (Some trans, _warns) <-
+        let ?transOpts = transOpts llvmOpts
+         in translateModule halloc memVar llvmMod
 
      putStrLn ("Translated bitcode into Crucible")
 
