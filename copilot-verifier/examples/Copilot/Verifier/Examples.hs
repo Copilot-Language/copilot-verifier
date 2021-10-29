@@ -15,6 +15,7 @@ import qualified Copilot.Verifier.Examples.Engine  as Engine
 import qualified Copilot.Verifier.Examples.Heater  as Heater
 import qualified Copilot.Verifier.Examples.Structs as Structs
 import qualified Copilot.Verifier.Examples.Voting  as Voting
+import qualified Copilot.Verifier.Examples.WCV     as WCV
 
 allExamples :: Map (CI Text) (IO ())
 allExamples = Map.fromList
@@ -26,6 +27,7 @@ allExamples = Map.fromList
     , example "Heater" Heater.main
     , example "Structs" Structs.main
     , example "Voting" Voting.main
+    , example "WCV"    WCV.main
     ]
   where
     example :: Text -> IO () -> (CI Text, IO ())

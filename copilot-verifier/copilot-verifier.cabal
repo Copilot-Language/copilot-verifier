@@ -73,6 +73,7 @@ library copilot-verifier-examples
     Copilot.Verifier.Examples.Heater
     Copilot.Verifier.Examples.Structs
     Copilot.Verifier.Examples.Voting
+    Copilot.Verifier.Examples.WCV
 
 executable verify-examples
   import: bldflags
