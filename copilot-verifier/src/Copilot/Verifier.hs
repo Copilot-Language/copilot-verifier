@@ -144,7 +144,7 @@ verify csettings0 properties prefix spec =
           let csrc = odir </> prefix ++ ".c"
           let cruxOpts1 = cruxOpts0{ outDir = odir, bldDir = odir, inputFiles = [csrc] }
           ocfg <- defaultOutputConfig cruxLogMessageToSayWhat
-          let ?outputConfig = ocfg (Just cruxOpts1)
+          let ?outputConfig = ocfg (Just (outputOptions cruxOpts1))
           cruxOpts2 <- withCruxLogMessage (postprocessOptions cruxOpts1)
           (cruxOpts3, llvmOpts2) <- processLLVMOptions (cruxOpts2, llvmOpts0{ optLevel = 0 })
           return (cruxOpts3, llvmOpts2, csettings, csrc)
@@ -153,7 +153,7 @@ verify csettings0 properties prefix spec =
      putStrLn ("Generated " ++ show csrc)
 
      ocfg <- defaultOutputConfig cruxLLVMLoggingToSayWhat
-     let ?outputConfig = ocfg (Just cruxOpts)
+     let ?outputConfig = ocfg (Just (outputOptions cruxOpts))
      bcFile <- withCruxLLVMLogging (genBitCode cruxOpts llvmOpts)
      putStrLn ("Compiled " ++ prefix ++ " into " ++ bcFile)
 
