@@ -47,7 +47,8 @@ import Lang.Crucible.Backend
   , pushAssumptionFrame, popUntilAssumptionFrame
   , getProofObligations, clearProofObligations
   , LabeledPred(..), addDurableProofObligation
-  , addAssumption, CrucibleAssumption(..)
+  , addAssumption, CrucibleAssumption(..), ppAbortExecReason
+  -- , ProofObligations, proofGoal, goalsToList, labeledPredMsg
   )
 import Lang.Crucible.Backend.Simple (newSimpleBackend)
 import Lang.Crucible.CFG.Core (AnyCFG(..), cfgArgTypes, cfgReturnType)
@@ -58,10 +59,11 @@ import Lang.Crucible.Simulator
   , defaultAbortHandler, runOverrideSim, partialValue, gpValue
   , GlobalVar, executeCrucible, OverrideSim, regValue
   , readGlobal, writeGlobal, callCFG, emptyRegMap, RegEntry(..)
+  , AbortedResult(..)
   )
 import Lang.Crucible.Simulator.GlobalState ( insertGlobal )
 import Lang.Crucible.Simulator.RegValue (RegValue, RegValue'(..))
-import Lang.Crucible.Simulator.SimError (SimError(..), SimErrorReason(..))
+import Lang.Crucible.Simulator.SimError (SimError(..), SimErrorReason(..)) -- ppSimError
 import Lang.Crucible.Types
   ( TypeRepr(..), (:~:)(..), KnownRepr(..), BoolType )
 
@@ -96,7 +98,7 @@ import Lang.Crucible.LLVM.TypeContext (TypeContext, llvmDataLayout)
 import Crux (defaultOutputConfig)
 import Crux.Config (cfgJoin, Config(..))
 import Crux.Config.Load (fromFile, fromEnv)
-import Crux.Config.Common (cruxOptions, CruxOptions(..), postprocessOptions, )
+import Crux.Config.Common (cruxOptions, CruxOptions(..), postprocessOptions, outputOptions )
 import Crux.Goal (proveGoalsOffline, provedGoalsTree)
 import Crux.Log
   ( cruxLogMessageToSayWhat, withCruxLogMessage, outputHandle
@@ -121,6 +123,10 @@ import What4.Interface
   , truePred, falsePred, eqPred, andPred, backendPred
   )
 import What4.Expr.Builder (FloatModeRepr(..), ExprBuilder, BoolExpr, startCaching)
+import What4.InterpretedFloatingPoint
+  ( FloatInfoRepr(..), IsInterpretedFloatExprBuilder(..)
+  , SingleFloat, DoubleFloat
+  )
 import What4.ProgramLoc (ProgramLoc, mkProgramLoc, Position(..))
 import What4.Solver.Adapter (SolverAdapter(..))
 import What4.Solver.Z3 (z3Adapter)
@@ -175,6 +181,8 @@ verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile =
      startCaching sym
      bbMapRef <- newIORef mempty
      let ?recordLLVMAnnotation = \an bb -> modifyIORef bbMapRef (Map.insert an bb)
+     ocfg <- defaultOutputConfig cruxLLVMLoggingToSayWhat
+     let ?outputConfig = ocfg (Just (outputOptions cruxOpts))
 
      let adapters = [z3Adapter] -- TODO? configurable
      extendConfig (solver_adapter_config_options z3Adapter) (getConfiguration sym)
@@ -377,7 +385,12 @@ executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerO
      res <- executeCrucible [] initSt
      case res of
        FinishedResult _ pr -> return (pr^.partialValue.gpValue.to regValue)
-       AbortedResult{} -> fail "simulation aborted!"
+       AbortedResult _ (AbortedExec rsn _) ->
+         fail $ unlines $ ["Simulation aborted!", show (ppAbortExecReason rsn)]
+       AbortedResult _ (AbortedExit ec) ->
+         fail $ unlines $ ["Simulation called exit!", show ec]
+       AbortedResult _ (AbortedBranch{}) ->
+         fail $ unlines $ ["Simulation aborted for multiple reasons."]
        TimeoutResult{} -> fail "simulation timed out!"
  where
   setupTrigger gs (_,gv,_) = insertGlobal gv (falsePred sym) gs
@@ -591,10 +604,8 @@ copilotExprToRegValue sym = loop
     loop (CW4.XWord64 x) (LLVMPointerRepr w) | Just Refl <- testEquality w (knownNat @64) =
       llvmPointer_bv sym x
 
---    loop (CW4.XFloat x)  (FloatRepr SingleFloatRepr) v =
---      iFloatEq sym x v
---    loop (CW4.XDouble x) (FloatRepr DoubleFloatRepr) v =
---      iFloatEq sym x v
+    loop (CW4.XFloat x)  (FloatRepr SingleFloatRepr) = return x
+    loop (CW4.XDouble x) (FloatRepr DoubleFloatRepr) = return x
 
     loop CW4.XEmptyArray (VectorRepr _tpr) =
       pure V.empty
@@ -646,11 +657,8 @@ computeEqualVals sym mem = loop
     loop Word64 (CW4.XWord64 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @64) =
       bvEq sym x =<< projectLLVM_bv sym v
 
-
---    loop Float (CW4.XFloat x)  (FloatRepr SingleFloatRepr) v =
---      iFloatEq sym x v
---    loop Double (CW4.XDouble x) (FloatRepr DoubleFloatRepr) v =
---      iFloatEq sym x v
+    loop Float (CW4.XFloat x)  (FloatRepr SingleFloatRepr) v = iFloatEq @_ @SingleFloat sym x v
+    loop Double (CW4.XDouble x) (FloatRepr DoubleFloatRepr) v = iFloatEq @_ @DoubleFloat sym x v
 
     loop (Array _ctp) CW4.XEmptyArray (VectorRepr _tpr) vs =
       pure $ backendPred sym $ V.null vs
@@ -866,8 +874,16 @@ proveObls cruxOpts adapters bbMapRef simctx =
      obls <- getProofObligations sym
      clearProofObligations sym
 
+--     mapM_ (print . ppSimError) (summarizeObls sym obls)
+
      results <- proveGoalsOffline adapters cruxOpts simctx (explainFailure sym bbMapRef) obls
      presentResults sym results
+
+{-
+summarizeObls :: sym -> ProofObligations sym -> [SimError]
+summarizeObls _ Nothing = []
+summarizeObls _ (Just obls) = map (view labeledPredMsg . proofGoal) (goalsToList obls)
+-}
 
 presentResults ::
   Logs msgs =>
