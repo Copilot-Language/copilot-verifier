@@ -123,12 +123,6 @@ import What4.Solver.Adapter (SolverAdapter(..))
 import What4.Solver.Z3 (z3Adapter)
 import What4.Symbol (safeSymbol)
 
-setOutput :: CruxOptions -> CSettings -> CSettings
-setOutput cruxOpts cin =
-  case cSettingsOutputDirectory cin of
-    Nothing -> cin{ cSettingsOutputDirectory = Just (outDir cruxOpts)  }
-    Just _  -> cin
-
 verify :: CSettings -> [String] -> String -> Spec -> IO ()
 verify csettings0 properties prefix spec =
   do (cruxOpts, llvmOpts, csettings, csrc) <-
@@ -137,10 +131,13 @@ verify csettings0 properties prefix spec =
           -- TODO, load from and actual configuration file?
           fileOpts <- fromFile "copilot-verifier" cfg Nothing
           (cruxOpts0, llvmOpts0) <- foldM fromEnv fileOpts (cfgEnv cfg)
-          let odir = case cSettingsOutputDirectory csettings0 of
-                       Just d -> d
-                       Nothing -> "results" </> prefix
-          let csettings = csettings0{ cSettingsOutputDirectory = Just odir }
+          let odir0 = cSettingsOutputDirectory csettings0
+          let odir = -- A bit grimy, but this corresponds to how crux-llvm sets
+                     -- its output directory.
+                     if odir0 == "."
+                       then "results" </> prefix
+                       else odir0
+          let csettings = csettings0{ cSettingsOutputDirectory = odir }
           let csrc = odir </> prefix ++ ".c"
           let cruxOpts1 = cruxOpts0{ outDir = odir, bldDir = odir, inputFiles = [csrc] }
           ocfg <- defaultOutputConfig cruxLogMessageToSayWhat
