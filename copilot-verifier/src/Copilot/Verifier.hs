@@ -21,6 +21,7 @@ import qualified Data.Map.Strict as Map
 import Data.IORef (newIORef, modifyIORef, IORef)
 import qualified Text.LLVM.AST as L
 import Data.List (genericLength)
+import qualified Data.Vector as V
 import qualified Data.BitVector.Sized as BV
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
@@ -38,6 +39,7 @@ import Data.Parameterized.NatRepr (intValue, natValue, testEquality, knownNat, t
 import Data.Parameterized.Nonce (globalNonceGenerator)
 import Data.Parameterized.Some (Some(..))
 import Data.Parameterized.TraversableFC (toListFC)
+import qualified Data.Parameterized.Vector as PVec
 
 import Lang.Crucible.Backend
   ( IsSymInterface, Goals(..), Assumptions, Assertion
@@ -71,7 +73,7 @@ import Lang.Crucible.LLVM.Intrinsics
   ( IntrinsicsOptions, OverrideTemplate, basic_llvm_override, LLVMOverride(..) )
 
 import Lang.Crucible.LLVM.MemType
-  ( MemType(..)
+  ( MemType(..), SymType(..)
   , i1, i8, i16, i32, i64
   , memTypeSize, memTypeAlign
   , mkStructInfo
@@ -81,7 +83,7 @@ import Lang.Crucible.LLVM.MemModel
   , HasPtrWidth, doResolveGlobal, doLoad, doStore
   , MemOptions, StorageType, bitvectorType
   , ptrAdd, toStorableType, projectLLVM_bv
-  , pattern LLVMPointerRepr, llvmPointer_bv
+  , pattern LLVMPointerRepr, pattern PtrRepr, llvmPointer_bv
   , memRepr, Mem
   )
 import Lang.Crucible.LLVM.Translation
@@ -115,7 +117,7 @@ import What4.Interface
   ( Pred, bvLit, bvAdd, bvUrem, bvMul, bvIsNonzero, bvEq, isEq
   , getConfiguration, freshBoundedBV, predToBV
   , getCurrentProgramLoc, printSymExpr
-  , truePred, falsePred, eqPred
+  , truePred, falsePred, eqPred, andPred, backendPred
   )
 import What4.Expr.Builder (FloatModeRepr(..), ExprBuilder, BoolExpr, startCaching)
 import What4.ProgramLoc (ProgramLoc, mkProgramLoc, Position(..))
@@ -329,8 +331,10 @@ triggerOverride (_,triggerGlobal,_) (nm, _guard, args) =
          , L.decComdat = Nothing
          }
 
-  toTypeRepr (Some ctp, _) = llvmTypeAsRepr (copilotTypeToMemType (llvmDataLayout ?lc) ctp) Some
-  llvmArgTy (Some ctp, _) = copilotTypeToLLVMType ctp
+  -- Use the `-ArrayPtr` functions here to ensure that arguments with array
+  -- types are treated as pointers. See Note [Arrays].
+  toTypeRepr (Some ctp, _) = llvmTypeAsRepr (copilotTypeToMemTypeArrayPtr (llvmDataLayout ?lc) ctp) Some
+  llvmArgTy (Some ctp, _) = copilotTypeToLLVMTypeArrayPtr ctp
 
   checkArgs sym mem = loop (0::Integer)
     where
@@ -591,8 +595,11 @@ copilotExprToRegValue sym = loop
 --    loop (CW4.XDouble x) (FloatRepr DoubleFloatRepr) v =
 --      iFloatEq sym x v
 
-    loop CW4.XEmptyArray _ = fail "FIXME: empty array"
-    loop CW4.XArray{} _ = fail "FIXME: nonempty array"
+    loop CW4.XEmptyArray (VectorRepr _tpr) =
+      pure V.empty
+    loop (CW4.XArray xs) (VectorRepr tpr) =
+      V.generateM (PVec.lengthInt xs) (\i -> loop (PVec.elemAtUnsafe i xs) tpr)
+
     loop CW4.XStruct{} _ = fail "FIXME: struct"
 
     loop x tpr =
@@ -612,7 +619,7 @@ computeEqualVals :: forall sym tp a wptr.
   TypeRepr tp ->
   RegValue sym tp ->
   IO (Pred sym)
-computeEqualVals sym _mem = loop
+computeEqualVals sym mem = loop
   where
     loop :: forall tp' a'. Type a' -> CW4.XExpr sym -> TypeRepr tp' -> RegValue sym tp' -> IO (Pred sym)
     loop Bool (CW4.XBool b) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @1) =
@@ -642,9 +649,28 @@ computeEqualVals sym _mem = loop
 --    loop Double (CW4.XDouble x) (FloatRepr DoubleFloatRepr) v =
 --      iFloatEq sym x v
 
-    loop (Array _) CW4.XEmptyArray _ _ = fail "FIXME: empty array"
-    loop (Array _) CW4.XArray{} _ _ = fail "FIXME: nonempty array"
+    loop (Array _ctp) CW4.XEmptyArray (VectorRepr _tpr) vs =
+      pure $ backendPred sym $ V.null vs
+    loop (Array ctp) (CW4.XArray xs) (VectorRepr tpr) vs
+      | PVec.lengthInt xs == V.length vs
+      = V.ifoldM (\pAcc i v -> andPred sym pAcc =<< loop ctp (PVec.elemAtUnsafe i xs) tpr v)
+                 (truePred sym) vs
+      | otherwise
+      = pure (falsePred sym)
     loop (Struct _) CW4.XStruct{} _ _ = fail "FIXME: struct"
+
+    -- If we counter a pointer, read the memory that it points to and recurse,
+    -- using the Copilot type as a guide for how much memory to read. This is
+    -- needed to make array-typed arguments work (see Note [Arrays]), although
+    -- there is nothing about this code that is array-specific. In fact, this
+    -- code could also work for pointer arguments of any other type.
+    loop ctp x PtrRepr v =
+      do let memTy = copilotTypeToMemTypeBool8 (llvmDataLayout ?lc) ctp
+             typeAlign = memTypeAlign (llvmDataLayout ?lc) memTy
+         stp <- toStorableType memTy
+         llvmTypeAsRepr memTy $ \tpr ->
+           do regVal <- doLoad sym mem v stp tpr typeAlign
+              loop ctp x tpr regVal
 
     loop _ctp x tpr _v =
       fail $ unlines ["Mismatch between Copilot value and crucible value", show x, show tpr]
@@ -687,6 +713,16 @@ copilotTypeToMemTypeBool8 ::
 copilotTypeToMemTypeBool8 _dl CT.Bool = i8
 copilotTypeToMemTypeBool8 dl tp = copilotTypeToMemType dl tp
 
+-- | Like 'copilotTypeToMemType', except that 'CT.Array's are converted to
+-- 'PtrType's instead of direct 'ArrayType's. See @Note [Arrays]@.
+copilotTypeToMemTypeArrayPtr ::
+  DataLayout ->
+  CT.Type a ->
+  MemType
+copilotTypeToMemTypeArrayPtr dl (CT.Array tp) =
+  PtrType (MemType (copilotTypeToMemTypeBool8 dl tp))
+copilotTypeToMemTypeArrayPtr dl tp = copilotTypeToMemType dl tp
+
 -- | Convert a Copilot 'CT.Type' to an LLVM 'L.Type'. 'CT.Bool's are
 -- assumed to be one bit in size. See @Note [How LLVM represents bool]@.
 copilotTypeToLLVMType ::
@@ -723,6 +759,14 @@ copilotTypeToLLVMTypeBool8 ::
 copilotTypeToLLVMTypeBool8 CT.Bool = L.PrimType (L.Integer 8)
 copilotTypeToLLVMTypeBool8 tp = copilotTypeToLLVMType tp
 
+-- | Like 'copilotTypeToLLVMType', except that 'CT.Array's are converted to
+-- 'L.PtrTo' instead of direct 'L.Array's. See @Note [Arrays]@.
+copilotTypeToLLVMTypeArrayPtr ::
+  CT.Type a ->
+  L.Type
+copilotTypeToLLVMTypeArrayPtr (CT.Array tp) = L.PtrTo (copilotTypeToLLVMTypeBool8 tp)
+copilotTypeToLLVMTypeArrayPtr tp = copilotTypeToLLVMType tp
+
 {-
 Note [How LLVM represents bool]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -742,6 +786,39 @@ composite type (e.g., the element type in an array).
 
 The story for the `copilotTypeToMemType` and `copilotTypeToMemTypeBool8`
 functions is similar.
+
+Note [Arrays]
+~~~~~~~~~~~~~
+When Clang compiles a function with an array argument, such as this trigger
+function:
+
+  void func(int32_t func_arg0[2]) { ... }
+
+It will produce the following LLVM code:
+
+  declare void @func(i32*) { ... }
+
+Note that the argument is an i32*, not a [2 x i32]. As a result, we can't
+translate Copilot array types directly to LLVM array types when they're used as
+arguments to a function. This impedance mismatch is handled in two places:
+
+1. The `copilotTypeToMemTypeArrayPtr`/`copilotTypeToLLVMTypeArrayPtr` functions
+   special-case Copilot arrays such that they are translated to pointers. These
+   functions are used when declaring the argument types of an override for a
+   trigger function (see `triggerOverride`).
+2. The `computeEqualVals` function has a special case for pointer
+   arguments—see the case that matches on `PtrRepr`. When a `PtrRepr` is
+   encounted, the underlying array values that it points to are read from
+   memory. Because `PtrRepr` doesn't record the type of the thing being pointed
+   to, `computeEqualVals` uses the corresponding Copilot type as a guide to
+   determine how much memory to read and at what type the memory should be
+   used. After this, `computeEqualVals` reads from the read array
+   element-by-element—see the `VectorRepr` cases.
+
+   Note that unlike `computeEqualVals`, `copilotExprToRegValue` does not need
+   a `PtrRepr` case. This is because `copilotExprToRegValue` is ultimately used
+   in service of calling writing elements of streams to memory, and streams do
+   not store pointer values (at least, not in today's Copilot).
 -}
 
 proveObls ::
