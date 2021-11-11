@@ -435,7 +435,7 @@ setupPrestate sym mem0 prfbundle =
 
    setupExternalInput mem (nm, Some ctp, v) =
      do -- Compute LLVM/Crucible type information from the Copilot type
-        let memTy      = copilotTypeToMemType' (llvmDataLayout ?lc) ctp
+        let memTy      = copilotTypeToMemTypeBool8 (llvmDataLayout ?lc) ctp
         let typeAlign  = memTypeAlign (llvmDataLayout ?lc) memTy
         stType <- toStorableType memTy
         Some typeRepr <- return (llvmTypeAsRepr memTy Some)
@@ -454,7 +454,7 @@ setupPrestate sym mem0 prfbundle =
         let buflen  = genericLength vs :: Integer
 
         -- Compute LLVM/Crucible type information from the Copilot type
-        let memTy      = copilotTypeToMemType' (llvmDataLayout ?lc) ctp
+        let memTy      = copilotTypeToMemTypeBool8 (llvmDataLayout ?lc) ctp
         let typeLen    = memTypeSize (llvmDataLayout ?lc) memTy
         let typeAlign  = memTypeAlign (llvmDataLayout ?lc) memTy
         stType <- toStorableType memTy
@@ -517,7 +517,7 @@ assertStateRelation sym mem prfst =
         let buflen  = genericLength vs :: Integer
 
         -- Compute LLVM/Crucible type information from the Copilot type
-        let memTy      = copilotTypeToMemType' (llvmDataLayout ?lc) ctp
+        let memTy      = copilotTypeToMemTypeBool8 (llvmDataLayout ?lc) ctp
         let typeLen    = memTypeSize (llvmDataLayout ?lc) memTy
         let typeAlign  = memTypeAlign (llvmDataLayout ?lc) memTy
         stType <- toStorableType memTy
@@ -642,13 +642,8 @@ computeEqualVals sym = loop
     loop x tpr _v =
       fail $ unlines ["Mismatch between Copilot value and crucible value", show x, show tpr]
 
-copilotTypeToMemType' ::
-  DataLayout ->
-  CT.Type a ->
-  MemType
-copilotTypeToMemType' _dl CT.Bool = i8
-copilotTypeToMemType' dl tp = copilotTypeToMemType dl tp
-
+-- | Convert a Copilot 'CT.Type' to a Crucible 'MemType'. 'CT.Bool's are
+-- assumed to be one bit in size. See @Note [How LLVM represents bool]@.
 copilotTypeToMemType ::
   DataLayout ->
   CT.Type a ->
@@ -669,13 +664,24 @@ copilotTypeToMemType dl = loop
     loop CT.Double = DoubleType
     loop t0@(CT.Array tp) =
       let len = fromIntegral (tylength t0) in
-      ArrayType len (loop tp)
+      ArrayType len (copilotTypeToMemTypeBool8 dl tp)
     loop (CT.Struct v) =
       StructType (mkStructInfo dl False (map val (CT.toValues v)))
 
     val :: forall t. CT.Value t -> MemType
-    val (CT.Value tp _) = loop tp
+    val (CT.Value tp _) = copilotTypeToMemTypeBool8 dl tp
 
+-- | Like 'copilotTypeToMemType', except that 'CT.Bool's are assumed to be
+-- eight bits, not one bit. See @Note [How LLVM represents bool]@.
+copilotTypeToMemTypeBool8 ::
+  DataLayout ->
+  CT.Type a ->
+  MemType
+copilotTypeToMemTypeBool8 _dl CT.Bool = i8
+copilotTypeToMemTypeBool8 dl tp = copilotTypeToMemType dl tp
+
+-- | Convert a Copilot 'CT.Type' to an LLVM 'L.Type'. 'CT.Bool's are
+-- assumed to be one bit in size. See @Note [How LLVM represents bool]@.
 copilotTypeToLLVMType ::
   CT.Type a ->
   L.Type
@@ -695,13 +701,41 @@ copilotTypeToLLVMType = loop
     loop CT.Double = L.PrimType (L.FloatType L.Double)
     loop t0@(CT.Array tp) =
       let len = fromIntegral (tylength t0) in
-      L.Array len (loop tp)
+      L.Array len (copilotTypeToLLVMTypeBool8 tp)
     loop (CT.Struct v) =
       L.Struct (map val (CT.toValues v))
 
     val :: forall t. CT.Value t -> L.Type
-    val (CT.Value tp _) = loop tp
+    val (CT.Value tp _) = copilotTypeToLLVMTypeBool8 tp
 
+-- | Like 'copilotTypeToLLVMType', except that 'CT.Bool's are assumed to be
+-- eight bits, not one bit. See @Note [How LLVM represents bool]@.
+copilotTypeToLLVMTypeBool8 ::
+  CT.Type a ->
+  L.Type
+copilotTypeToLLVMTypeBool8 CT.Bool = L.PrimType (L.Integer 8)
+copilotTypeToLLVMTypeBool8 tp = copilotTypeToLLVMType tp
+
+{-
+Note [How LLVM represents bool]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+How are C values of type `bool` represented in LLVM? It depends. If it's being
+stored directly a `bool`, it's represented with `i1` (i.e., a single bit). If
+a `bool` is a member of some composite type, such as a pointer, array, or
+struct, however, it's representing with `i8` (i.e., eight bits). This means
+that we have to be careful when converting Bool-typed Copilot values, as they
+can become `i1` or `i8` depending on the context.
+
+copilot-verifier handles this by having both `copilotTypeToLLVMType` and
+`copilotTypeToLLVMTypeBool8` functions. The former function treats `bool`s as
+`i1`, whereas the latter treats `bool`s as `i8`. The former is used when
+converting "top-level" types (e.g., the argument types in a trigger override),
+whereas the latter is used when converting types that are part of a larger
+composite type (e.g., the element type in an array).
+
+The story for the `copilotTypeToMemType` and `copilotTypeToMemTypeBool8`
+functions is similar.
+-}
 
 proveObls ::
   IsSymInterface sym =>
