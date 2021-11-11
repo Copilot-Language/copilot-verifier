@@ -311,9 +311,10 @@ triggerOverride (_,triggerGlobal,_) (nm, _guard, args) =
      Some argCtx ->
       basic_llvm_override $
       LLVMOverride decl argCtx UnitRepr $
-        \_memOps sym calledArgs ->
+        \memOps sym calledArgs ->
           do writeGlobal triggerGlobal (truePred sym)
-             liftIO $ checkArgs sym (toListFC Some calledArgs) (map snd args)
+             mem <- readGlobal memOps
+             liftIO $ checkArgs sym mem (toListFC Some calledArgs) args
              return ()
 
  where
@@ -331,14 +332,14 @@ triggerOverride (_,triggerGlobal,_) (nm, _guard, args) =
   toTypeRepr (Some ctp, _) = llvmTypeAsRepr (copilotTypeToMemType (llvmDataLayout ?lc) ctp) Some
   llvmArgTy (Some ctp, _) = copilotTypeToLLVMType ctp
 
-  checkArgs sym = loop (0::Integer)
+  checkArgs sym mem = loop (0::Integer)
     where
-    loop i (x:xs) (v:vs) = checkArg sym i x v >> loop (i+1) xs vs
+    loop i (x:xs) ((ctp,v):vs) = checkArg sym mem i x ctp v >> loop (i+1) xs vs
     loop _ [] [] = return ()
     loop _ _ _ = fail $ "Argument list mismatch in " ++ nm
 
-  checkArg sym i (Some (RegEntry tp v)) x =
-    do eq <- computeEqualVals sym x tp v
+  checkArg sym mem i (Some (RegEntry tp v)) (Some ctp) x =
+    do eq <- computeEqualVals sym mem ctp x tp v
        let shortmsg = "Trigger " ++ show nm ++ " argument " ++ show i
        let longmsg  = show (printSymExpr eq)
        let rsn      = AssertFailureSimError shortmsg longmsg
@@ -545,7 +546,7 @@ assertStateRelation sym mem prfst =
                   ptrAdd sym ?ptrWidth bufPtr x3
 
              v' <- doLoad sym mem ptrVal stType typeRepr typeAlign
-             eq <- computeEqualVals sym v typeRepr v'
+             eq <- computeEqualVals sym mem ctp v typeRepr v'
              let shortmsg = "State equality condition: " ++ show nm ++ " index value " ++ show i
              let longmsg  = show (printSymExpr eq)
              let rsn      = AssertFailureSimError shortmsg longmsg
@@ -598,48 +599,54 @@ copilotExprToRegValue sym = loop
       fail $ unlines ["Mismatch between Copilot value and crucible value", show x, show tpr]
 
 
-computeEqualVals :: forall sym tp.
+computeEqualVals :: forall sym tp a wptr.
   IsSymInterface sym =>
+  HasPtrWidth wptr =>
+  HasLLVMAnn sym =>
+  (?lc :: TypeContext) =>
+  (?memOpts :: MemOptions) =>
   sym ->
+  MemImpl sym ->
+  Type a ->
   CW4.XExpr sym ->
   TypeRepr tp ->
   RegValue sym tp ->
   IO (Pred sym)
-computeEqualVals sym = loop
+computeEqualVals sym _mem = loop
   where
-    loop :: forall tp'. CW4.XExpr sym -> TypeRepr tp' -> RegValue sym tp' -> IO (Pred sym)
-    loop (CW4.XBool b) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @1) =
+    loop :: forall tp' a'. Type a' -> CW4.XExpr sym -> TypeRepr tp' -> RegValue sym tp' -> IO (Pred sym)
+    loop Bool (CW4.XBool b) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @1) =
       isEq sym b =<< bvIsNonzero sym =<< projectLLVM_bv sym v
-    loop (CW4.XBool b) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @8) =
+    loop Bool (CW4.XBool b) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @8) =
       isEq sym b =<< bvIsNonzero sym =<< projectLLVM_bv sym v
-    loop (CW4.XInt8 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @8) =
+    loop Int8 (CW4.XInt8 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @8) =
       bvEq sym x =<< projectLLVM_bv sym v
-    loop (CW4.XInt16 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @16) =
+    loop Int16 (CW4.XInt16 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @16) =
       bvEq sym x =<< projectLLVM_bv sym v
-    loop (CW4.XInt32 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @32) =
+    loop Int32 (CW4.XInt32 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @32) =
       bvEq sym x =<< projectLLVM_bv sym v
-    loop (CW4.XInt64 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @64) =
+    loop Int64 (CW4.XInt64 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @64) =
       bvEq sym x =<< projectLLVM_bv sym v
-    loop (CW4.XWord8 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @8) =
+    loop Word8 (CW4.XWord8 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @8) =
       bvEq sym x =<< projectLLVM_bv sym v
-    loop (CW4.XWord16 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @16) =
+    loop Word16 (CW4.XWord16 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @16) =
       bvEq sym x =<< projectLLVM_bv sym v
-    loop (CW4.XWord32 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @32) =
+    loop Word32 (CW4.XWord32 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @32) =
       bvEq sym x =<< projectLLVM_bv sym v
-    loop (CW4.XWord64 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @64) =
+    loop Word64 (CW4.XWord64 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @64) =
       bvEq sym x =<< projectLLVM_bv sym v
 
 
---    loop (CW4.XFloat x)  (FloatRepr SingleFloatRepr) v =
+--    loop Float (CW4.XFloat x)  (FloatRepr SingleFloatRepr) v =
 --      iFloatEq sym x v
---    loop (CW4.XDouble x) (FloatRepr DoubleFloatRepr) v =
+--    loop Double (CW4.XDouble x) (FloatRepr DoubleFloatRepr) v =
 --      iFloatEq sym x v
 
-    loop CW4.XEmptyArray _ _ = fail "FIXME: empty array"
-    loop CW4.XArray{} _ _ = fail "FIXME: nonempty array"
-    loop CW4.XStruct{} _ _ = fail "FIXME: struct"
+    loop (Array _) CW4.XEmptyArray _ _ = fail "FIXME: empty array"
+    loop (Array _) CW4.XArray{} _ _ = fail "FIXME: nonempty array"
+    loop (Struct _) CW4.XStruct{} _ _ = fail "FIXME: struct"
 
-    loop x tpr _v =
+    loop _ctp x tpr _v =
       fail $ unlines ["Mismatch between Copilot value and crucible value", show x, show tpr]
 
 -- | Convert a Copilot 'CT.Type' to a Crucible 'MemType'. 'CT.Bool's are
