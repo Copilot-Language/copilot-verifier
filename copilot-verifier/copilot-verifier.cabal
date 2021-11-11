@@ -46,6 +46,7 @@ common bldflags
     prettyprinter >= 1.7.0,
     text,
     transformers,
+    vector,
     what4 >= 0.4
 
 library
@@ -64,6 +65,7 @@ library copilot-verifier-examples
     copilot-verifier
   exposed-modules:
     Copilot.Verifier.Examples
+    Copilot.Verifier.Examples.Array
     Copilot.Verifier.Examples.Arith
     Copilot.Verifier.Examples.Clock
     Copilot.Verifier.Examples.Counter

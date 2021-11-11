@@ -7,6 +7,7 @@ import qualified Data.Map as Map
 import Data.Map (Map)
 import Data.Text (Text)
 
+import qualified Copilot.Verifier.Examples.Array   as Array
 import qualified Copilot.Verifier.Examples.Arith   as Arith
 import qualified Copilot.Verifier.Examples.Clock   as Clock
 import qualified Copilot.Verifier.Examples.Counter as Counter
@@ -16,7 +17,8 @@ import qualified Copilot.Verifier.Examples.Voting  as Voting
 
 allExamples :: Map (CI Text) (IO ())
 allExamples = Map.fromList
-    [ example "Arith" Arith.main
+    [ example "Array" Array.main
+    , example "Arith" Arith.main
     , example "Clock" Clock.main
     , example "Counter" Counter.main
     , example "Engine" Engine.main
