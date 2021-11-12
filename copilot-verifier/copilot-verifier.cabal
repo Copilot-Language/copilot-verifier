@@ -42,7 +42,7 @@ common bldflags
     llvm-pretty,
     mtl,
     panic >= 0.3,
-    parameterized-utils >= 1.0.8 && < 2.2,
+    parameterized-utils >= 2.1.4 && < 2.2,
     prettyprinter >= 1.7.0,
     text,
     transformers,
@@ -71,6 +71,7 @@ library copilot-verifier-examples
     Copilot.Verifier.Examples.Counter
     Copilot.Verifier.Examples.Engine
     Copilot.Verifier.Examples.Heater
+    Copilot.Verifier.Examples.Structs
     Copilot.Verifier.Examples.Voting
 
 executable verify-examples
