@@ -39,6 +39,7 @@ import Data.Parameterized.NatRepr (intValue, natValue, testEquality, knownNat, t
 import Data.Parameterized.Nonce (globalNonceGenerator)
 import Data.Parameterized.Some (Some(..))
 import Data.Parameterized.TraversableFC (toListFC)
+import Data.Parameterized.TraversableFC.WithIndex (ifoldlMFC)
 import qualified Data.Parameterized.Vector as PVec
 
 import Lang.Crucible.Backend
@@ -59,7 +60,7 @@ import Lang.Crucible.Simulator
   , readGlobal, writeGlobal, callCFG, emptyRegMap, RegEntry(..)
   )
 import Lang.Crucible.Simulator.GlobalState ( insertGlobal )
-import Lang.Crucible.Simulator.RegValue (RegValue)
+import Lang.Crucible.Simulator.RegValue (RegValue, RegValue'(..))
 import Lang.Crucible.Simulator.SimError (SimError(..), SimErrorReason(..))
 import Lang.Crucible.Types
   ( TypeRepr(..), (:~:)(..), KnownRepr(..), BoolType )
@@ -331,10 +332,10 @@ triggerOverride (_,triggerGlobal,_) (nm, _guard, args) =
          , L.decComdat = Nothing
          }
 
-  -- Use the `-ArrayPtr` functions here to ensure that arguments with array
-  -- types are treated as pointers. See Note [Arrays].
-  toTypeRepr (Some ctp, _) = llvmTypeAsRepr (copilotTypeToMemTypeArrayPtr (llvmDataLayout ?lc) ctp) Some
-  llvmArgTy (Some ctp, _) = copilotTypeToLLVMTypeArrayPtr ctp
+  -- Use the `-CompositePtr` functions here to ensure that arguments with array
+  -- or struct types are treated as pointers. See Note [Arrays and structs].
+  toTypeRepr (Some ctp, _) = llvmTypeAsRepr (copilotTypeToMemTypeCompositePtr (llvmDataLayout ?lc) ctp) Some
+  llvmArgTy (Some ctp, _) = copilotTypeToLLVMTypeCompositePtr ctp
 
   checkArgs sym mem = loop (0::Integer)
     where
@@ -599,8 +600,10 @@ copilotExprToRegValue sym = loop
       pure V.empty
     loop (CW4.XArray xs) (VectorRepr tpr) =
       V.generateM (PVec.lengthInt xs) (\i -> loop (PVec.elemAtUnsafe i xs) tpr)
-
-    loop CW4.XStruct{} _ = fail "FIXME: struct"
+    loop (CW4.XStruct xs) (StructRepr ctx) =
+      Ctx.traverseWithIndex
+        (\i tpr -> RV <$> loop (xs !! Ctx.indexVal i) tpr)
+        ctx
 
     loop x tpr =
       fail $ unlines ["Mismatch between Copilot value and crucible value", show x, show tpr]
@@ -657,13 +660,25 @@ computeEqualVals sym mem = loop
                  (truePred sym) vs
       | otherwise
       = pure (falsePred sym)
-    loop (Struct _) CW4.XStruct{} _ _ = fail "FIXME: struct"
+    loop (Struct struct) (CW4.XStruct xs) (StructRepr ctx) vs
+      | length copilotVals == Ctx.sizeInt (Ctx.size vs)
+      = ifoldlMFC (\i pAcc tpr ->
+                    case copilotVals !! Ctx.indexVal i of
+                      (Value ctp _, x) ->
+                        andPred sym pAcc =<< loop ctp x tpr (unRV (vs Ctx.! i)))
+                  (truePred sym) ctx
+      | otherwise
+      = pure (falsePred sym)
+      where
+        copilotVals :: [(Value a', CW4.XExpr sym)]
+        copilotVals = zip (toValues struct) xs
 
-    -- If we counter a pointer, read the memory that it points to and recurse,
+    -- If we encounter a pointer, read the memory that it points to and recurse,
     -- using the Copilot type as a guide for how much memory to read. This is
-    -- needed to make array-typed arguments work (see Note [Arrays]), although
-    -- there is nothing about this code that is array-specific. In fact, this
-    -- code could also work for pointer arguments of any other type.
+    -- needed to make array- or struct-typed arguments work (see
+    -- Note [Arrays and structs]), although there is nothing about this code
+    -- that is array- or struct-specific. In fact, this code could also work
+    -- for pointer arguments of any other type.
     loop ctp x PtrRepr v =
       do let memTy = copilotTypeToMemTypeBool8 (llvmDataLayout ?lc) ctp
              typeAlign = memTypeAlign (llvmDataLayout ?lc) memTy
@@ -713,15 +728,18 @@ copilotTypeToMemTypeBool8 ::
 copilotTypeToMemTypeBool8 _dl CT.Bool = i8
 copilotTypeToMemTypeBool8 dl tp = copilotTypeToMemType dl tp
 
--- | Like 'copilotTypeToMemType', except that 'CT.Array's are converted to
--- 'PtrType's instead of direct 'ArrayType's. See @Note [Arrays]@.
-copilotTypeToMemTypeArrayPtr ::
+-- | Like 'copilotTypeToMemType', except that composite types (i.e.,
+-- 'CT.Array's and 'CT.Struct's) are converted to 'PtrType's instead of direct
+-- 'ArrayType's or 'StructType's. See @Note [Arrays and structs]@.
+copilotTypeToMemTypeCompositePtr ::
   DataLayout ->
   CT.Type a ->
   MemType
-copilotTypeToMemTypeArrayPtr dl (CT.Array tp) =
+copilotTypeToMemTypeCompositePtr dl (CT.Array tp) =
   PtrType (MemType (copilotTypeToMemTypeBool8 dl tp))
-copilotTypeToMemTypeArrayPtr dl tp = copilotTypeToMemType dl tp
+copilotTypeToMemTypeCompositePtr _dl (CT.Struct struct) =
+  PtrType (Alias (copilotStructIdent struct))
+copilotTypeToMemTypeCompositePtr dl tp = copilotTypeToMemType dl tp
 
 -- | Convert a Copilot 'CT.Type' to an LLVM 'L.Type'. 'CT.Bool's are
 -- assumed to be one bit in size. See @Note [How LLVM represents bool]@.
@@ -759,13 +777,21 @@ copilotTypeToLLVMTypeBool8 ::
 copilotTypeToLLVMTypeBool8 CT.Bool = L.PrimType (L.Integer 8)
 copilotTypeToLLVMTypeBool8 tp = copilotTypeToLLVMType tp
 
--- | Like 'copilotTypeToLLVMType', except that 'CT.Array's are converted to
--- 'L.PtrTo' instead of direct 'L.Array's. See @Note [Arrays]@.
-copilotTypeToLLVMTypeArrayPtr ::
+-- | Like 'copilotTypeToLLVMType', except that composite types (i.e.,
+-- 'CT.Array's and 'CT.Struct's) are converted to 'L.PtrTo' instead of direct
+-- 'L.Array's or 'L.Struct's. See @Note [Arrays and structs]@.
+copilotTypeToLLVMTypeCompositePtr ::
   CT.Type a ->
   L.Type
-copilotTypeToLLVMTypeArrayPtr (CT.Array tp) = L.PtrTo (copilotTypeToLLVMTypeBool8 tp)
-copilotTypeToLLVMTypeArrayPtr tp = copilotTypeToLLVMType tp
+copilotTypeToLLVMTypeCompositePtr (CT.Array tp) =
+  L.PtrTo (copilotTypeToLLVMTypeBool8 tp)
+copilotTypeToLLVMTypeCompositePtr (CT.Struct struct) =
+  L.PtrTo (L.Alias (copilotStructIdent struct))
+copilotTypeToLLVMTypeCompositePtr tp = copilotTypeToLLVMType tp
+
+-- | Given a struct @s@, construct the name @struct.s@ as an LLVM identifier.
+copilotStructIdent :: Struct a => a -> L.Ident
+copilotStructIdent struct = L.Ident $ "struct." ++ typename struct
 
 {-
 Note [How LLVM represents bool]
@@ -787,8 +813,8 @@ composite type (e.g., the element type in an array).
 The story for the `copilotTypeToMemType` and `copilotTypeToMemTypeBool8`
 functions is similar.
 
-Note [Arrays]
-~~~~~~~~~~~~~
+Note [Arrays and structs]
+~~~~~~~~~~~~~~~~~~~~~~~~~
 When Clang compiles a function with an array argument, such as this trigger
 function:
 
@@ -802,10 +828,10 @@ Note that the argument is an i32*, not a [2 x i32]. As a result, we can't
 translate Copilot array types directly to LLVM array types when they're used as
 arguments to a function. This impedance mismatch is handled in two places:
 
-1. The `copilotTypeToMemTypeArrayPtr`/`copilotTypeToLLVMTypeArrayPtr` functions
-   special-case Copilot arrays such that they are translated to pointers. These
-   functions are used when declaring the argument types of an override for a
-   trigger function (see `triggerOverride`).
+1. The `copilotTypeToMemTypeCompositePtr`/`copilotTypeToLLVMTypeCompositePtr`
+   functions special-case Copilot arrays such that they are translated to
+   pointers. These functions are used when declaring the argument types of an
+   override for a trigger function (see `triggerOverride`).
 2. The `computeEqualVals` function has a special case for pointer
    arguments—see the case that matches on `PtrRepr`. When a `PtrRepr` is
    encounted, the underlying array values that it points to are read from
@@ -819,6 +845,10 @@ arguments to a function. This impedance mismatch is handled in two places:
    a `PtrRepr` case. This is because `copilotExprToRegValue` is ultimately used
    in service of calling writing elements of streams to memory, and streams do
    not store pointer values (at least, not in today's Copilot).
+
+There is a very similar story for structs. Copilot passes structs by reference
+in trigger functions (e.g., `void trigger(struct s *ss)`), so we must also load
+from a `PtrRepr` in `computeEqualVals` to handle structs.
 -}
 
 proveObls ::

@@ -13,6 +13,7 @@ import qualified Copilot.Verifier.Examples.Clock   as Clock
 import qualified Copilot.Verifier.Examples.Counter as Counter
 import qualified Copilot.Verifier.Examples.Engine  as Engine
 import qualified Copilot.Verifier.Examples.Heater  as Heater
+import qualified Copilot.Verifier.Examples.Structs as Structs
 import qualified Copilot.Verifier.Examples.Voting  as Voting
 
 allExamples :: Map (CI Text) (IO ())
@@ -23,6 +24,7 @@ allExamples = Map.fromList
     , example "Counter" Counter.main
     , example "Engine" Engine.main
     , example "Heater" Heater.main
+    , example "Structs" Structs.main
     , example "Voting" Voting.main
     ]
   where
