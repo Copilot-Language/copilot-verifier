@@ -21,8 +21,11 @@ import qualified Data.Map.Strict as Map
 import Data.IORef (newIORef, modifyIORef, IORef)
 import qualified Text.LLVM.AST as L
 import Data.List (genericLength)
+import Data.List.NonEmpty (NonEmpty(..))
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Vector as V
 import qualified Data.BitVector.Sized as BV
+import qualified Prettyprinter as PP
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
 
@@ -385,12 +388,7 @@ executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerO
      res <- executeCrucible [] initSt
      case res of
        FinishedResult _ pr -> return (pr^.partialValue.gpValue.to regValue)
-       AbortedResult _ (AbortedExec rsn _) ->
-         fail $ unlines $ ["Simulation aborted!", show (ppAbortExecReason rsn)]
-       AbortedResult _ (AbortedExit ec) ->
-         fail $ unlines $ ["Simulation called exit!", show ec]
-       AbortedResult _ (AbortedBranch{}) ->
-         fail $ unlines $ ["Simulation aborted for multiple reasons."]
+       AbortedResult _ abortRes -> fail $ show $ ppAbortedResult abortRes
        TimeoutResult{} -> fail "simulation timed out!"
  where
   setupTrigger gs (_,gv,_) = insertGlobal gv (falsePred sym) gs
@@ -403,6 +401,21 @@ executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerO
 
   assumeProperty b =
     addAssumption sym (GenericAssumption dummyLoc "Property assumption" b)
+
+  ppAbortedResult :: AbortedResult sym ext -> PP.Doc ann
+  ppAbortedResult abortRes =
+    case gatherReasons abortRes of
+      reason :| [] -> reason
+      reasons      -> PP.vcat $ "Simulation aborted for multiple reasons."
+                              : NE.toList reasons
+
+  gatherReasons :: AbortedResult sym ext -> NonEmpty (PP.Doc ann)
+  gatherReasons (AbortedExec rsn _) =
+    PP.vcat ["Simulation aborted!", ppAbortExecReason rsn] :| []
+  gatherReasons (AbortedExit ec) =
+    PP.vcat ["Simulation called exit!", PP.viaShow ec] :| []
+  gatherReasons (AbortedBranch _ _ t f) =
+    gatherReasons t <> gatherReasons f
 
   runStep :: OverrideSim (Crux sym) sym LLVM (RegEntry sym Mem) EmptyCtx Mem (MemImpl sym)
   runStep =
