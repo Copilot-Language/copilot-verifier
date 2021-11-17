@@ -70,7 +70,9 @@ library copilot-verifier-examples
     Copilot.Verifier.Examples.Clock
     Copilot.Verifier.Examples.Counter
     Copilot.Verifier.Examples.Engine
+    Copilot.Verifier.Examples.FPOps
     Copilot.Verifier.Examples.Heater
+    Copilot.Verifier.Examples.IntOps
     Copilot.Verifier.Examples.Structs
     Copilot.Verifier.Examples.Voting
     Copilot.Verifier.Examples.WCV
