@@ -1,68 +1,83 @@
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 module Copilot.Verifier.Examples.FPOps where
 
 import Copilot.Compile.C99 (mkDefaultCSettings)
 import qualified Copilot.Language.Stream as Copilot
 import Copilot.Verifier (verify)
+import Data.Proxy (Proxy(..))
 import Language.Copilot
 import qualified Prelude as P
 
+mkSpecFor :: forall a proxy. (RealFloat a, Typed a) => proxy a -> String -> Spec
+mkSpecFor _ nameSuffix = do
+  let mkName :: String -> String
+      mkName namePrefix = namePrefix P.++ nameSuffix
+
+      stream :: Stream a
+      stream = extern (mkName "stream") Nothing
+
+  triggerOp1 (mkName "abs") abs stream
+  -- Currently fails due to https://github.com/GaloisInc/copilot-verifier/issues/14
+  -- triggerOp1 (mkName "signum") signum stream
+  triggerOp1 (mkName "recip") recip stream
+  triggerOp1 (mkName "exp") exp stream
+  triggerOp1 (mkName "sqrt") sqrt stream
+  triggerOp1 (mkName "log") log stream
+  triggerOp1 (mkName "sin") sin stream
+  triggerOp1 (mkName "tan") tan stream
+  triggerOp1 (mkName "cos") cos stream
+  triggerOp1 (mkName "asin") asin stream
+  triggerOp1 (mkName "atan") atan stream
+  triggerOp1 (mkName "acos") acos stream
+  triggerOp1 (mkName "sinh") sinh stream
+  triggerOp1 (mkName "tanh") tanh stream
+  triggerOp1 (mkName "cosh") cosh stream
+  triggerOp1 (mkName "asinh") asinh stream
+  triggerOp1 (mkName "atanh") atanh stream
+  triggerOp1 (mkName "acosh") acosh stream
+  triggerOp1 (mkName "ceiling") Copilot.ceiling stream
+  triggerOp1 (mkName "floor") Copilot.floor stream
+
+  triggerOp2 (mkName "add") (+) stream
+  triggerOp2 (mkName "sub") (-) stream
+  triggerOp2 (mkName "mul") (*) stream
+  triggerOp2 (mkName "div") (/) stream
+  triggerOp2 (mkName "pow") (**) stream
+  triggerOp2 (mkName "logBase") logBase stream
+  triggerOp2 (mkName "atan2") Copilot.atan2 stream
+
 spec :: Spec
 spec = do
-  let stream :: Stream Double
-      stream = extern "stream" Nothing
+  mkSpecFor (Proxy @Float) "F"
+  mkSpecFor (Proxy @Double) "D"
 
-  triggerOp1 "abs" abs stream
-  -- Currently fails due to https://github.com/GaloisInc/copilot-verifier/issues/14
-  -- triggerOp1 "signum" signum stream
-  triggerOp1 "recip" recip stream
-  triggerOp1 "exp" exp stream
-  triggerOp1 "sqrt" sqrt stream
-  triggerOp1 "log" log stream
-  triggerOp1 "sin" sin stream
-  triggerOp1 "tan" tan stream
-  triggerOp1 "cos" cos stream
-  triggerOp1 "asin" asin stream
-  triggerOp1 "atan" atan stream
-  triggerOp1 "acos" acos stream
-  triggerOp1 "sinh" sinh stream
-  triggerOp1 "tanh" tanh stream
-  triggerOp1 "cosh" cosh stream
-  triggerOp1 "asinh" asinh stream
-  triggerOp1 "atanh" atanh stream
-  triggerOp1 "acosh" acosh stream
-  triggerOp1 "ceiling" Copilot.ceiling stream
-  triggerOp1 "floor" Copilot.floor stream
-
-  triggerOp2 "add" (+) stream
-  triggerOp2 "sub" (-) stream
-  triggerOp2 "mul" (*) stream
-  triggerOp2 "div" (/) stream
-  triggerOp2 "pow" (**) stream
-  triggerOp2 "logBase" logBase stream
-  triggerOp2 "atan2" Copilot.atan2 stream
-
-triggerOp1 :: String ->
-              (Stream Double -> Stream Double) ->
-              Stream Double ->
+triggerOp1 :: (RealFloat a, Typed a) =>
+              String ->
+              (Stream a -> Stream a) ->
+              Stream a ->
               Spec
 triggerOp1 name op stream =
   trigger (name P.++ "Trigger") (testOp1 op stream) [arg stream]
 
-triggerOp2 :: String ->
-              (Stream Double -> Stream Double -> Stream Double) ->
-              Stream Double ->
+triggerOp2 :: (RealFloat a, Typed a) =>
+              String ->
+              (Stream a -> Stream a -> Stream a) ->
+              Stream a ->
               Spec
 triggerOp2 name op stream =
   trigger (name P.++ "Trigger") (testOp2 op stream) [arg stream]
 
-testOp1 :: (Stream Double -> Stream Double) -> Stream Double -> Stream Bool
+testOp1 :: (RealFloat a, Typed a) =>
+           (Stream a -> Stream a) -> Stream a -> Stream Bool
 testOp1 op stream =
   -- NB: Use (>=) rather than (==) here, as floating-point equality gets weird
   -- due to NaNs.
   op stream >= op stream
 
-testOp2 :: (Stream Double -> Stream Double -> Stream Double) -> Stream Double -> Stream Bool
+testOp2 :: (RealFloat a, Typed a) =>
+           (Stream a -> Stream a -> Stream a) -> Stream a -> Stream Bool
 testOp2 op stream =
   op stream stream >= op stream stream
 

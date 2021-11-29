@@ -13,3 +13,6 @@
 [submodule "deps/llvm-pretty-bc-parser"]
 	path = deps/llvm-pretty-bc-parser
 	url = https://github.com/GaloisInc/llvm-pretty-bc-parser.git
+[submodule "deps/language-c99-util"]
+	path = deps/language-c99-util
+	url = https://github.com/GaloisInc/language-c99-util.git
