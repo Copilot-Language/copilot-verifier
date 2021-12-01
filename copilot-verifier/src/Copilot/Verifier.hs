@@ -1,4 +1,7 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE ExplicitNamespaces #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -16,6 +19,7 @@ import Control.Lens (view, (^.), to)
 import Control.Monad (foldM, forM_)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State (execStateT, lift, StateT(..))
+import Data.Aeson (ToJSON)
 import qualified Data.Text as Text
 import qualified Data.Map.Strict as Map
 import Data.IORef (newIORef, modifyIORef, IORef)
@@ -25,6 +29,7 @@ import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Vector as V
 import qualified Data.BitVector.Sized as BV
+import GHC.Generics (Generic)
 import qualified Prettyprinter as PP
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
@@ -34,6 +39,8 @@ import Copilot.Core
 import qualified Copilot.Core.Type as CT
 
 import qualified Copilot.Theorem.What4 as CW4
+
+import qualified Copilot.Verifier.Log as Log
 
 import Data.Parameterized.Ctx (EmptyCtx)
 import Data.Parameterized.Context (pattern Empty)
@@ -103,19 +110,14 @@ import Crux.Config (cfgJoin, Config(..))
 import Crux.Config.Load (fromFile, fromEnv)
 import Crux.Config.Common (cruxOptions, CruxOptions(..), postprocessOptions, outputOptions )
 import Crux.Goal (proveGoalsOffline, provedGoalsTree)
-import Crux.Log
-  ( cruxLogMessageToSayWhat, withCruxLogMessage, outputHandle
-  , Logs, SupportsCruxLogMessage, logGoal
-  )
+import qualified Crux.Log as Log
 import Crux.Types (SimCtxt, Crux, ProcessedGoals(..), ProofResult(..))
 
 import Crux.LLVM.Config (llvmCruxConfig, LLVMOptions(..))
 import Crux.LLVM.Compile (genBitCode)
+import qualified Crux.LLVM.Log as Log
 import Crux.LLVM.Simulate (setupSimCtxt, parseLLVM, explainFailure)
-import CruxLLVMMain
-  ( CruxLLVMLogging, withCruxLLVMLogging
-  , cruxLLVMLoggingToSayWhat, processLLVMOptions
-  )
+import CruxLLVMMain (processLLVMOptions)
 
 import What4.Config
   (extendConfig)
@@ -137,6 +139,7 @@ import What4.Symbol (safeSymbol)
 
 verify :: CSettings -> [String] -> String -> Spec -> IO ()
 verify csettings0 properties prefix spec =
+  withCopilotLogging $
   do (cruxOpts, llvmOpts, csettings, csrc) <-
        do llvmcfg <- llvmCruxConfig
           let cfg = cfgJoin cruxOptions llvmcfg
@@ -152,24 +155,26 @@ verify csettings0 properties prefix spec =
           let csettings = csettings0{ cSettingsOutputDirectory = odir }
           let csrc = odir </> prefix ++ ".c"
           let cruxOpts1 = cruxOpts0{ outDir = odir, bldDir = odir, inputFiles = [csrc] }
-          ocfg <- defaultOutputConfig cruxLogMessageToSayWhat
+          ocfg <- defaultOutputConfig copilotLoggingToSayWhat
           let ?outputConfig = ocfg (Just (outputOptions cruxOpts1))
-          cruxOpts2 <- withCruxLogMessage (postprocessOptions cruxOpts1)
+          cruxOpts2 <- postprocessOptions cruxOpts1
           (cruxOpts3, llvmOpts2) <- processLLVMOptions (cruxOpts2, llvmOpts0{ optLevel = 0 })
           return (cruxOpts3, llvmOpts2, csettings, csrc)
 
      compileWith csettings prefix spec
-     putStrLn ("Generated " ++ show csrc)
-
-     ocfg <- defaultOutputConfig cruxLLVMLoggingToSayWhat
+     ocfg <- defaultOutputConfig copilotLoggingToSayWhat
      let ?outputConfig = ocfg (Just (outputOptions cruxOpts))
-     bcFile <- withCruxLLVMLogging (genBitCode cruxOpts llvmOpts)
-     putStrLn ("Compiled " ++ prefix ++ " into " ++ bcFile)
+     Log.sayCopilot $ Log.GeneratedCFile csrc
+
+     bcFile <- genBitCode cruxOpts llvmOpts
+     Log.sayCopilot $ Log.CompiledBitcodeFile prefix bcFile
 
      verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile
 
 verifyBitcode ::
-  Logs CruxLLVMLogging =>
+  Log.Logs msgs =>
+  Log.SupportsCruxLogMessage msgs =>
+  Log.SupportsCopilotLogMessage msgs =>
   CSettings ->
   [String] ->
   Spec ->
@@ -184,8 +189,6 @@ verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile =
      startCaching sym
      bbMapRef <- newIORef mempty
      let ?recordLLVMAnnotation = \an bb -> modifyIORef bbMapRef (Map.insert an bb)
-     ocfg <- defaultOutputConfig cruxLLVMLoggingToSayWhat
-     let ?outputConfig = ocfg (Just (outputOptions cruxOpts))
 
      let adapters = [z3Adapter] -- TODO? configurable
      extendConfig (solver_adapter_config_options z3Adapter) (getConfiguration sym)
@@ -193,14 +196,14 @@ verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile =
      memVar <- mkMemVar "llvm_memory" halloc
 
      let simctx = (setupSimCtxt halloc sym (memOpts llvmOpts) memVar)
-                  { printHandle = view outputHandle ?outputConfig }
+                  { printHandle = view Log.outputHandle ?outputConfig }
 
      llvmMod <- parseLLVM bcFile
      (Some trans, _warns) <-
         let ?transOpts = transOpts llvmOpts
          in translateModule halloc memVar llvmMod
 
-     putStrLn ("Translated bitcode into Crucible")
+     Log.sayCopilot Log.TranslatedToCrucible
 
      let llvmCtxt = trans ^. transContext
      let ?lc = llvmCtxt ^. llvmTypeCtx
@@ -209,11 +212,10 @@ verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile =
 
      llvmPtrWidth llvmCtxt $ \ptrW ->
        withPtrWidth ptrW $
-       withCruxLLVMLogging $
        do emptyMem   <- initializeAllMemory sym llvmCtxt llvmMod
           initialMem <- populateAllGlobals sym (globalInitMap trans) emptyMem
 
-          putStrLn "Generating proof state data"
+          Log.sayCopilot Log.GeneratingProofState
           proofStateBundle <- CW4.computeBisimulationProofBundle sym properties spec
 
           verifyInitialState cruxOpts adapters bbMapRef simctx initialMem
@@ -224,8 +226,9 @@ verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile =
 
 verifyInitialState ::
   IsSymInterface sym =>
-  Logs msgs =>
-  SupportsCruxLogMessage msgs =>
+  Log.Logs msgs =>
+  Log.SupportsCruxLogMessage msgs =>
+  Log.SupportsCopilotLogMessage msgs =>
   sym ~ ExprBuilder t st fs =>
   HasPtrWidth wptr =>
   HasLLVMAnn sym =>
@@ -241,20 +244,21 @@ verifyInitialState ::
   IO ()
 verifyInitialState cruxOpts adapters bbMapRef simctx mem initialState =
   do let sym = simctx^.ctxSymInterface
-     putStrLn "Computing initial state verification conditions"
+     Log.sayCopilot $ Log.ComputingConditions Log.InitialState
      frm <- pushAssumptionFrame sym
 
      assertStateRelation sym mem initialState
 
      popUntilAssumptionFrame sym frm
 
-     putStrLn "Proving initial state verification conditions"
+     Log.sayCopilot $ Log.ProvingConditions Log.InitialState
      proveObls cruxOpts adapters bbMapRef simctx
 
 verifyStepBisimulation ::
   IsSymInterface sym =>
-  Logs msgs =>
-  SupportsCruxLogMessage msgs =>
+  Log.Logs msgs =>
+  Log.SupportsCruxLogMessage msgs =>
+  Log.SupportsCopilotLogMessage msgs =>
   sym ~ ExprBuilder t st fs =>
   HasPtrWidth wptr =>
   HasLLVMAnn sym =>
@@ -277,7 +281,7 @@ verifyStepBisimulation ::
   IO ()
 verifyStepBisimulation cruxOpts adapters csettings bbMapRef simctx llvmMod modTrans memVar mem prfbundle =
   do let sym = simctx^.ctxSymInterface
-     putStrLn "Computing step bisimulation verification conditions"
+     Log.sayCopilot $ Log.ComputingConditions Log.StepBisimulation
 
      frm <- pushAssumptionFrame sym
 
@@ -303,7 +307,7 @@ verifyStepBisimulation cruxOpts adapters csettings bbMapRef simctx llvmMod modTr
 
      popUntilAssumptionFrame sym frm
 
-     putStrLn "Proving step bisimulation verification conditions"
+     Log.sayCopilot $ Log.ProvingConditions Log.StepBisimulation
      proveObls cruxOpts adapters bbMapRef simctx
 
 
@@ -875,8 +879,9 @@ from a `PtrRepr` in `computeEqualVals` to handle structs.
 proveObls ::
   IsSymInterface sym =>
   sym ~ ExprBuilder t st fs =>
-  Logs msgs =>
-  SupportsCruxLogMessage msgs =>
+  Log.Logs msgs =>
+  Log.SupportsCruxLogMessage msgs =>
+  Log.SupportsCopilotLogMessage msgs =>
   CruxOptions ->
   [SolverAdapter st] ->
   IORef (LLVMAnnMap sym) ->
@@ -899,14 +904,15 @@ summarizeObls _ (Just obls) = map (view labeledPredMsg . proofGoal) (goalsToList
 -}
 
 presentResults ::
-  Logs msgs =>
+  Log.Logs msgs =>
+  Log.SupportsCopilotLogMessage msgs =>
   IsSymInterface sym =>
   sym ->
   (ProcessedGoals, Maybe (Goals (Assumptions sym) (Assertion sym, [ProgramLoc], ProofResult sym))) ->
   IO ()
 presentResults sym (num, goals)
   | numTotalGoals == 0
-  = putStrLn $ "All obligations proved by concrete simplification"
+  = Log.sayCopilot Log.AllGoalsProved
 
     -- All goals were proven
   | numProvedGoals == numTotalGoals
@@ -921,8 +927,32 @@ presentResults sym (num, goals)
     numProvedGoals = provedGoals num
 
     printGoals =
-      do putStrLn $ unwords ["Proved",show numProvedGoals, "of", show numTotalGoals, "total goals"]
+      do Log.sayCopilot $ Log.OnlySomeGoalsProved numProvedGoals numTotalGoals
          goals' <- provedGoalsTree sym goals
          case goals' of
-           Just g -> logGoal g
+           Just g -> Log.logGoal g
            Nothing -> return ()
+
+data CopilotLogging
+  = LoggingCrux Log.CruxLogMessage
+  | LoggingCruxLLVM Log.CruxLLVMLogMessage
+  | LoggingCopilot Log.CopilotLogMessage
+  deriving stock Generic
+  deriving anyclass ToJSON
+
+copilotLoggingToSayWhat :: CopilotLogging -> Log.SayWhat
+copilotLoggingToSayWhat (LoggingCrux msg) = Log.cruxLogMessageToSayWhat msg
+copilotLoggingToSayWhat (LoggingCruxLLVM msg) = Log.cruxLLVMLogMessageToSayWhat msg
+copilotLoggingToSayWhat (LoggingCopilot msg) = Log.copilotLogMessageToSayWhat msg
+
+withCopilotLogging ::
+  ( ( Log.SupportsCruxLogMessage CopilotLogging
+    , Log.SupportsCruxLLVMLogMessage CopilotLogging
+    , Log.SupportsCopilotLogMessage CopilotLogging
+    ) => computation ) ->
+  computation
+withCopilotLogging computation = do
+  let ?injectCruxLogMessage = LoggingCrux
+      ?injectCruxLLVMLogMessage = LoggingCruxLLVM
+      ?injectCopilotLogMessage = LoggingCopilot
+    in computation
