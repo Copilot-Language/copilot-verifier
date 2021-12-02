@@ -15,7 +15,7 @@ module Copilot.Verifier.Examples.Array where
 
 import Language.Copilot
 import Copilot.Compile.C99
-import Copilot.Verifier (verify)
+import Copilot.Verifier (Verbosity, verifyWithVerbosity)
 
 -- Lets define an array of length 2.
 -- Make the buffer of the streams 3 elements long.
@@ -33,6 +33,6 @@ spec = do
   trigger "func" (arr .!! 0) [arg arr]
 
 -- Compile the spec
-main :: IO ()
-main = reify spec >>= verify mkDefaultCSettings [] "array"
--- main = interpret 30 spec
+verifySpec :: Verbosity -> IO ()
+verifySpec verb = reify spec >>= verifyWithVerbosity verb mkDefaultCSettings [] "array"
+-- verifySpec _ = interpret 30 spec

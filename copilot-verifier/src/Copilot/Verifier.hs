@@ -13,7 +13,11 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 
-module Copilot.Verifier where
+module Copilot.Verifier
+  ( verify
+  , Verbosity(..)
+  , verifyWithVerbosity
+  ) where
 
 import Control.Lens (view, (^.), to)
 import Control.Monad (foldM, forM_)
@@ -108,7 +112,10 @@ import Lang.Crucible.LLVM.TypeContext (TypeContext, llvmDataLayout)
 import Crux (defaultOutputConfig)
 import Crux.Config (cfgJoin, Config(..))
 import Crux.Config.Load (fromFile, fromEnv)
-import Crux.Config.Common (cruxOptions, CruxOptions(..), postprocessOptions, outputOptions )
+import Crux.Config.Common
+  ( cruxOptions, CruxOptions(..), postprocessOptions, outputOptions
+  , OutputOptions(..)
+  )
 import Crux.Goal (proveGoalsOffline, provedGoalsTree)
 import qualified Crux.Log as Log
 import Crux.Types (SimCtxt, Crux, ProcessedGoals(..), ProofResult(..))
@@ -137,10 +144,25 @@ import What4.Solver.Adapter (SolverAdapter(..))
 import What4.Solver.Z3 (z3Adapter)
 import What4.Symbol (safeSymbol)
 
+-- | @'verify' csettings props prefix spec@ verifies the Copilot specification
+-- @spec@ under the assumptions @props@ matches the behavior of the C program
+-- compiled with @csettings@ within a directory prefixed by @prefix@.
 verify :: CSettings -> [String] -> String -> Spec -> IO ()
-verify csettings0 properties prefix spec =
+verify = verifyWithVerbosity Noisy
+
+-- | How much output should verification produce?
+data Verbosity
+  = Noisy -- ^ Produce diagnostics as verification proceeds.
+  | Quiet -- ^ Don't produce any diagnostics.
+  deriving stock (Eq, Show)
+
+-- | Like 'verify', but with an option to control its 'Verbosity'.
+verifyWithVerbosity :: Verbosity -> CSettings -> [String] -> String -> Spec -> IO ()
+verifyWithVerbosity verb csettings0 properties prefix spec =
   withCopilotLogging $
-  do (cruxOpts, llvmOpts, csettings, csrc) <-
+  do ocfg1 <- defaultOutputConfig copilotLoggingToSayWhat
+     let ocfg2 mbOutputOpts = (ocfg1 mbOutputOpts) { Log._quiet = quiet }
+     (cruxOpts, llvmOpts, csettings, csrc) <-
        do llvmcfg <- llvmCruxConfig
           let cfg = cfgJoin cruxOptions llvmcfg
           -- TODO, load from and actual configuration file?
@@ -154,22 +176,26 @@ verify csettings0 properties prefix spec =
                        else odir0
           let csettings = csettings0{ cSettingsOutputDirectory = odir }
           let csrc = odir </> prefix ++ ".c"
-          let cruxOpts1 = cruxOpts0{ outDir = odir, bldDir = odir, inputFiles = [csrc] }
-          ocfg <- defaultOutputConfig copilotLoggingToSayWhat
-          let ?outputConfig = ocfg (Just (outputOptions cruxOpts1))
+          let cruxOpts1 = cruxOpts0{ outDir = odir, bldDir = odir, inputFiles = [csrc]
+                                   , outputOptions = (outputOptions cruxOpts0)
+                                                       { quietMode = quiet
+                                                       }
+                                   }
+          let ?outputConfig = ocfg2 (Just (outputOptions cruxOpts1))
           cruxOpts2 <- postprocessOptions cruxOpts1
           (cruxOpts3, llvmOpts2) <- processLLVMOptions (cruxOpts2, llvmOpts0{ optLevel = 0 })
           return (cruxOpts3, llvmOpts2, csettings, csrc)
 
      compileWith csettings prefix spec
-     ocfg <- defaultOutputConfig copilotLoggingToSayWhat
-     let ?outputConfig = ocfg (Just (outputOptions cruxOpts))
+     let ?outputConfig = ocfg2 (Just (outputOptions cruxOpts))
      Log.sayCopilot $ Log.GeneratedCFile csrc
 
      bcFile <- genBitCode cruxOpts llvmOpts
      Log.sayCopilot $ Log.CompiledBitcodeFile prefix bcFile
 
      verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile
+  where
+    quiet = verb == Quiet
 
 verifyBitcode ::
   Log.Logs msgs =>

@@ -86,6 +86,7 @@ executable verify-examples
   main-is: VerifyExamples.hs
   build-depends:
     case-insensitive,
+    copilot-verifier,
     copilot-verifier-examples,
     optparse-applicative
 
@@ -96,6 +97,7 @@ test-suite copilot-verifier-test
   hs-source-dirs: test
   build-depends:
     case-insensitive,
+    copilot-verifier,
     copilot-verifier-examples,
     tasty >= 0.10,
     tasty-hunit >= 0.10

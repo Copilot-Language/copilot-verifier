@@ -7,11 +7,12 @@
 
 module Copilot.Verifier.Examples.Clock where
 
-import qualified Prelude as P ()
+import Control.Monad (when)
+import qualified Prelude as P
 
 import Language.Copilot
 import Copilot.Compile.C99
-import Copilot.Verifier (verify)
+import Copilot.Verifier (Verbosity(..), verifyWithVerbosity)
 import Copilot.Theorem.What4 (prove, Solver(..))
 
 -- | We need to force a type for the argument of `period`.
@@ -34,8 +35,10 @@ spec = do
   trigger "clksHigh" (clkStream && clkStream') []
 
 
-main :: IO ()
-main =
+verifySpec :: Verbosity -> IO ()
+verifySpec verb =
   do s <- reify spec
-     print =<< prove Z3 s
-     verify mkDefaultCSettings [] "clock" s
+     r <- prove Z3 s
+     when (verb P.== Noisy) $
+       print r
+     verifyWithVerbosity verb mkDefaultCSettings [] "clock" s

@@ -57,29 +57,29 @@ copilotTag = "copilot-verifier"
 -- copilotFail :: Text -> SayWhat
 -- copilotFail = SayWhat Fail copilotTag
 
-copilotOK :: Text -> SayWhat
-copilotOK = SayWhat OK copilotTag
+copilotSimply :: Text -> SayWhat
+copilotSimply = SayWhat Simply copilotTag
 
 -- copilotWarn :: Text -> SayWhat
 -- copilotWarn = SayWhat Warn copilotTag
 
 copilotLogMessageToSayWhat :: CopilotLogMessage -> SayWhat
 copilotLogMessageToSayWhat (GeneratedCFile csrc) =
-  copilotOK $ "Generated " <> T.pack (show csrc)
+  copilotSimply $ "Generated " <> T.pack (show csrc)
 copilotLogMessageToSayWhat (CompiledBitcodeFile prefix bcFile) =
-  copilotOK $ "Compiled " <> T.pack prefix <> " into " <> T.pack bcFile
+  copilotSimply $ "Compiled " <> T.pack prefix <> " into " <> T.pack bcFile
 copilotLogMessageToSayWhat TranslatedToCrucible =
-  copilotOK "Translated bitcode into Crucible"
+  copilotSimply "Translated bitcode into Crucible"
 copilotLogMessageToSayWhat GeneratingProofState =
-  copilotOK "Generating proof state data"
+  copilotSimply "Generating proof state data"
 copilotLogMessageToSayWhat (ComputingConditions step) =
-  copilotOK $ "Computing " <> describeVerificationStep step <> " verification conditions"
+  copilotSimply $ "Computing " <> describeVerificationStep step <> " verification conditions"
 copilotLogMessageToSayWhat (ProvingConditions step) =
-  copilotOK $ "Proving " <> describeVerificationStep step <> " verification conditions"
+  copilotSimply $ "Proving " <> describeVerificationStep step <> " verification conditions"
 copilotLogMessageToSayWhat AllGoalsProved =
-  copilotOK "All obligations proved by concrete simplification"
+  copilotSimply "All obligations proved by concrete simplification"
 copilotLogMessageToSayWhat (OnlySomeGoalsProved numProvedGoals numTotalGoals) =
-  copilotOK $ T.unwords
+  copilotSimply $ T.unwords
     [ "Proved", T.pack (show numProvedGoals)
     , "of"
     , T.pack (show numTotalGoals), "total goals"

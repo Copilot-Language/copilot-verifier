@@ -3,9 +3,12 @@
 
 module Copilot.Verifier.Examples.Arith where
 
+import Control.Monad (when)
+import qualified Prelude as P
+
 import Language.Copilot
 import Copilot.Compile.C99
-import Copilot.Verifier (verify)
+import Copilot.Verifier (Verbosity(..), verifyWithVerbosity)
 import Copilot.Theorem.What4 (prove, Solver(..))
 
 -- The largest unsigned 32-bit prime
@@ -36,11 +39,12 @@ multRingSpec = do
   acc :: Stream Word32
   acc = [1] ++ unsafeCast ((cast acc * cast clamp) `mod` (cast lastPrime :: Stream Word64))
 
-main :: IO ()
-main =
+verifySpec :: Verbosity -> IO ()
+verifySpec verb =
   do s <- reify multRingSpec
      r <- prove Z3 s
-     print r
-     verify mkDefaultCSettings ["reduced"] "multRingSpec" s
+     when (verb P.== Noisy) $
+       print r
+     verifyWithVerbosity verb mkDefaultCSettings ["reduced"] "multRingSpec" s
 
---main = interpret 10 engineMonitor
+--verifySpec _ = interpret 10 engineMonitor

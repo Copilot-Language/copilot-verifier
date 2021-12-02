@@ -5,7 +5,7 @@ module Copilot.Verifier.Examples.FPOps where
 
 import Copilot.Compile.C99 (mkDefaultCSettings)
 import qualified Copilot.Language.Stream as Copilot
-import Copilot.Verifier (verify)
+import Copilot.Verifier (Verbosity, verifyWithVerbosity)
 import Data.Proxy (Proxy(..))
 import Language.Copilot
 import qualified Prelude as P
@@ -80,7 +80,7 @@ testOp2 :: (RealFloat a, Typed a) =>
 testOp2 op stream =
   op stream stream >= op stream stream
 
-main :: IO ()
-main = do
+verifySpec :: Verbosity -> IO ()
+verifySpec verb = do
   spec' <- reify spec
-  verify mkDefaultCSettings [] "fpOps" spec'
+  verifyWithVerbosity verb mkDefaultCSettings [] "fpOps" spec'
