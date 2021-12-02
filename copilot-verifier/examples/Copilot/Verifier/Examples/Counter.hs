@@ -8,9 +8,12 @@
 
 module Copilot.Verifier.Examples.Counter where
 
+import Control.Monad (when)
+import qualified Prelude as P
+
 import Language.Copilot
 import Copilot.Compile.C99
-import Copilot.Verifier (verify)
+import Copilot.Verifier (Verbosity(..), verifyWithVerbosity)
 import Copilot.Theorem.What4 (prove, Solver(..))
 
 -- A resettable counter
@@ -41,9 +44,11 @@ spec =
                                 (bytecounter == bytecounter2)))
      trigger "counter" true [arg $ bytecounter, arg $ bytecounter2]
 
-main :: IO ()
--- main = interpret 1280 spec
-main =
+verifySpec :: Verbosity -> IO ()
+-- verifSpec _ = interpret 1280 spec
+verifySpec verb =
   do s <- reify spec
-     print =<< prove Z3 s
-     verify mkDefaultCSettings ["range", "range2"] "counter" s
+     r <- prove Z3 s
+     when (verb P.== Noisy) $
+       print r
+     verifyWithVerbosity verb mkDefaultCSettings ["range", "range2"] "counter" s

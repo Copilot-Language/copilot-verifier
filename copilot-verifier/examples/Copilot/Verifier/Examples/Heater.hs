@@ -14,7 +14,7 @@ import Copilot.Compile.C99
 --import Copilot.Core.PrettyDot (prettyPrintDot)
 --import Copilot.Language.Prelude
 
-import Copilot.Verifier (verify)
+import Copilot.Verifier (Verbosity, verifyWithVerbosity)
 
 import Prelude ()
 
@@ -36,8 +36,8 @@ spec = do
   trigger "heatoff" (sumTemp > (21*fromIntegral window)) [arg sumTemp]
 
 -- Compile the spec
-main :: IO ()
-main = reify spec >>= verify mkDefaultCSettings [] "heater"
+verifySpec :: Verbosity -> IO ()
+verifySpec verb = reify spec >>= verifyWithVerbosity verb mkDefaultCSettings [] "heater"
 {-
   do spec' <- reify spec
      putStrLn $ prettyPrintDot spec'

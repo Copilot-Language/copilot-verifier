@@ -11,7 +11,7 @@ module Copilot.Verifier.Examples.WCV where
 import Language.Copilot
 import qualified Copilot.Theorem.What4 as CT
 import Copilot.Compile.C99
-import Copilot.Verifier (verify)
+import Copilot.Verifier (Verbosity, verifyWithVerbosity)
 
 import qualified Prelude as P
 import Data.Foldable (forM_)
@@ -173,10 +173,10 @@ spec = do
   -- Monad.void $ prop "3d" (forall $ (wcv tep s sz v vz)    == (wcv tep (neg s) (-sz) (neg v) (-vz)))
   trigger "well_clear_violation" (wcv tep s sz v vz) []
 
-main :: IO ()
-main = do
+verifySpec :: Verbosity -> IO ()
+verifySpec verb = do
   spec' <- reify spec
-  verify mkDefaultCSettings [] "wcv" spec'
+  verifyWithVerbosity verb mkDefaultCSettings [] "wcv" spec'
 
 {-
   -- Use Z3 to prove the properties.

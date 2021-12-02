@@ -6,12 +6,13 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 module Copilot.Verifier.Examples.Structs where
 
-import Control.Monad (void, forM_)
+import Control.Monad (void, forM_, when)
+import qualified Prelude as P
 
 import Language.Copilot
 import Copilot.Compile.C99
 import Copilot.Theorem.What4
-import Copilot.Verifier (verify)
+import Copilot.Verifier (Verbosity(..), verifyWithVerbosity)
 
 
 -- | Definition for `Volts`.
@@ -70,19 +71,20 @@ spec = do
   trigger "otherTrig" ((((battery#other) .!! 2) .!! 3) == (((battery#other) .!! 2) .!! 4))
                       [arg battery]
 
-main :: IO ()
-main = do
+verifySpec :: Verbosity -> IO ()
+verifySpec verb = do
   spec' <- reify spec
 
   -- Use Z3 to prove the properties.
   results <- prove Z3 spec'
 
   -- Print the results.
-  forM_ results $ \(nm, res) -> do
-    putStr $ nm <> ": "
-    case res of
-      Valid   -> putStrLn "valid"
-      Invalid -> putStrLn "invalid"
-      Unknown -> putStrLn "unknown"
+  when (verb P.== Noisy) $
+    forM_ results $ \(nm, res) -> do
+      putStr $ nm <> ": "
+      case res of
+        Valid   -> putStrLn "valid"
+        Invalid -> putStrLn "invalid"
+        Unknown -> putStrLn "unknown"
 
-  verify mkDefaultCSettings [] "structs" spec'
+  verifyWithVerbosity verb mkDefaultCSettings [] "structs" spec'
