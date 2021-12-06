@@ -18,8 +18,7 @@ spec = do
   _ <- prop "shiftByBits" (forall (0 <= shiftBy && shiftBy < 16))
 
   triggerOp1 "abs" abs stream
-  -- Currently fails due to https://github.com/GaloisInc/copilot-verifier/issues/14
-  -- triggerOp1 "signum" signum stream
+  triggerOp1 "signum" signum stream
   triggerOp1 "bwNot" complement stream
 
   triggerOp2 "add" (+) stream stream

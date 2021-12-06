@@ -19,8 +19,7 @@ mkSpecFor _ nameSuffix = do
       stream = extern (mkName "stream") Nothing
 
   triggerOp1 (mkName "abs") abs stream
-  -- Currently fails due to https://github.com/GaloisInc/copilot-verifier/issues/14
-  -- triggerOp1 (mkName "signum") signum stream
+  triggerOp1 (mkName "signum") signum stream
   triggerOp1 (mkName "recip") recip stream
   triggerOp1 (mkName "exp") exp stream
   triggerOp1 (mkName "sqrt") sqrt stream
