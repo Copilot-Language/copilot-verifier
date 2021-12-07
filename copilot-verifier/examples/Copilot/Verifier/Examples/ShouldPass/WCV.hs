@@ -6,7 +6,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE RebindableSyntax #-}
 
-module Copilot.Verifier.Examples.WCV where
+module Copilot.Verifier.Examples.ShouldPass.WCV where
 
 import Language.Copilot
 import qualified Copilot.Theorem.What4 as CT

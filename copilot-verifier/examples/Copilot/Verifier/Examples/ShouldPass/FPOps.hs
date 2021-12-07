@@ -1,7 +1,7 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
-module Copilot.Verifier.Examples.FPOps where
+module Copilot.Verifier.Examples.ShouldPass.FPOps where
 
 import Copilot.Compile.C99 (mkDefaultCSettings)
 import qualified Copilot.Language.Stream as Copilot

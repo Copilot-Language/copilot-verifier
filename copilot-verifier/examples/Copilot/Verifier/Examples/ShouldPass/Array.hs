@@ -11,7 +11,7 @@
 {-# LANGUAGE RebindableSyntax #-}
 {-# LANGUAGE DataKinds        #-}
 
-module Copilot.Verifier.Examples.Array where
+module Copilot.Verifier.Examples.ShouldPass.Array where
 
 import Language.Copilot
 import Copilot.Compile.C99

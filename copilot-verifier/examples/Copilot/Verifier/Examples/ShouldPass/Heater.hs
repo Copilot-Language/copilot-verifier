@@ -7,7 +7,7 @@
 -- enough. It read temperature as a byte (range -50C to 100C) and translates
 -- this to Celcius.
 
-module Copilot.Verifier.Examples.Heater where
+module Copilot.Verifier.Examples.ShouldPass.Heater where
 
 import Language.Copilot
 import Copilot.Compile.C99

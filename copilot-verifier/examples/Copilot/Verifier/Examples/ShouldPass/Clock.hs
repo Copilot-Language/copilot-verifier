@@ -5,7 +5,7 @@
 -- | Example showing usage of clocks to generate periodically recurring truth
 -- values.
 
-module Copilot.Verifier.Examples.Clock where
+module Copilot.Verifier.Examples.ShouldPass.Clock where
 
 import Control.Monad (when)
 import qualified Prelude as P

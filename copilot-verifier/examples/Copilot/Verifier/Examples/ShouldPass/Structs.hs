@@ -4,7 +4,7 @@
 
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE NoImplicitPrelude #-}
-module Copilot.Verifier.Examples.Structs where
+module Copilot.Verifier.Examples.ShouldPass.Structs where
 
 import Control.Monad (void, forM_, when)
 import qualified Prelude as P

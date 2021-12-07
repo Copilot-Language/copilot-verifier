@@ -1,7 +1,7 @@
 
 {-# LANGUAGE RebindableSyntax #-}
 
-module Copilot.Verifier.Examples.Arith where
+module Copilot.Verifier.Examples.ShouldPass.Arith where
 
 import Control.Monad (when)
 import qualified Prelude as P

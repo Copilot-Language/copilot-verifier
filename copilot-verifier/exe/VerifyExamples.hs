@@ -13,7 +13,7 @@ import Data.Traversable (for)
 import Options.Applicative
 
 import Copilot.Verifier (Verbosity(..))
-import Copilot.Verifier.Examples (allExamples)
+import Copilot.Verifier.Examples (shouldPassExamples)
 
 newtype Options = Options
   { examples :: [CI Text]
@@ -39,7 +39,7 @@ verifyExamples :: Options -> IO ()
 verifyExamples Options{examples} = do
   -- Check that all requested examples exist
   examplesWithMain <- for examples $ \example ->
-    case Map.lookup example (allExamples Noisy) of
+    case Map.lookup example (shouldPassExamples Noisy) of
       Just m  -> pure (example, m)
       Nothing -> fail $ "No example named " ++ Text.unpack (CI.original example)
 

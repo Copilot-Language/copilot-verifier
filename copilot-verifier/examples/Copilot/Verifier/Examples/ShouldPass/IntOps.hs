@@ -1,5 +1,5 @@
 {-# LANGUAGE NoImplicitPrelude #-}
-module Copilot.Verifier.Examples.IntOps where
+module Copilot.Verifier.Examples.ShouldPass.IntOps where
 
 import Copilot.Compile.C99 (mkDefaultCSettings)
 import Copilot.Verifier (Verbosity, verifyWithVerbosity)
