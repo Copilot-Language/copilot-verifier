@@ -67,6 +67,9 @@ library copilot-verifier-examples
     copilot-verifier
   exposed-modules:
     Copilot.Verifier.Examples
+
+    Copilot.Verifier.Examples.ShouldFail.UnderConstrained
+
     Copilot.Verifier.Examples.ShouldPass.Array
     Copilot.Verifier.Examples.ShouldPass.Arith
     Copilot.Verifier.Examples.ShouldPass.Clock
@@ -99,6 +102,8 @@ test-suite copilot-verifier-test
     case-insensitive,
     copilot-verifier,
     copilot-verifier-examples,
+    silently >= 1.2,
     tasty >= 0.10,
+    tasty-expected-failure >= 0.12,
     tasty-hunit >= 0.10
   main-is: Test.hs
