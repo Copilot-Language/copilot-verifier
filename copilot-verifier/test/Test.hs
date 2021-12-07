@@ -7,10 +7,10 @@ import Test.Tasty
 import Test.Tasty.HUnit
 
 import Copilot.Verifier (Verbosity(..))
-import Copilot.Verifier.Examples (allExamples)
+import Copilot.Verifier.Examples (shouldPassExamples)
 
 main :: IO ()
 main = defaultMain $
   testGroup "copilot-verifier-examples tests" $
     map (\(name, action) -> testCase (Text.unpack (CI.original name)) action)
-        (Map.toAscList (allExamples Quiet))
+        (Map.toAscList (shouldPassExamples Quiet))

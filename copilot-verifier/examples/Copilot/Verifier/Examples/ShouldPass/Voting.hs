@@ -6,7 +6,7 @@
 
 {-# LANGUAGE RebindableSyntax #-}
 
-module Copilot.Verifier.Examples.Voting where
+module Copilot.Verifier.Examples.ShouldPass.Voting where
 
 import Language.Copilot
 import Copilot.Compile.C99

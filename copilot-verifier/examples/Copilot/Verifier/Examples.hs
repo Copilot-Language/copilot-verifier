@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Copilot.Verifier.Examples (allExamples) where
+module Copilot.Verifier.Examples (shouldPassExamples) where
 
 import qualified Data.CaseInsensitive as CI
 import Data.CaseInsensitive (CI)
@@ -8,20 +8,20 @@ import Data.Map (Map)
 import Data.Text (Text)
 
 import Copilot.Verifier (Verbosity)
-import qualified Copilot.Verifier.Examples.Array   as Array
-import qualified Copilot.Verifier.Examples.Arith   as Arith
-import qualified Copilot.Verifier.Examples.Clock   as Clock
-import qualified Copilot.Verifier.Examples.Counter as Counter
-import qualified Copilot.Verifier.Examples.Engine  as Engine
-import qualified Copilot.Verifier.Examples.FPOps   as FPOps
-import qualified Copilot.Verifier.Examples.Heater  as Heater
-import qualified Copilot.Verifier.Examples.IntOps  as IntOps
-import qualified Copilot.Verifier.Examples.Structs as Structs
-import qualified Copilot.Verifier.Examples.Voting  as Voting
-import qualified Copilot.Verifier.Examples.WCV     as WCV
+import qualified Copilot.Verifier.Examples.ShouldPass.Array   as Array
+import qualified Copilot.Verifier.Examples.ShouldPass.Arith   as Arith
+import qualified Copilot.Verifier.Examples.ShouldPass.Clock   as Clock
+import qualified Copilot.Verifier.Examples.ShouldPass.Counter as Counter
+import qualified Copilot.Verifier.Examples.ShouldPass.Engine  as Engine
+import qualified Copilot.Verifier.Examples.ShouldPass.FPOps   as FPOps
+import qualified Copilot.Verifier.Examples.ShouldPass.Heater  as Heater
+import qualified Copilot.Verifier.Examples.ShouldPass.IntOps  as IntOps
+import qualified Copilot.Verifier.Examples.ShouldPass.Structs as Structs
+import qualified Copilot.Verifier.Examples.ShouldPass.Voting  as Voting
+import qualified Copilot.Verifier.Examples.ShouldPass.WCV     as WCV
 
-allExamples :: Verbosity -> Map (CI Text) (IO ())
-allExamples verb = Map.fromList
+shouldPassExamples :: Verbosity -> Map (CI Text) (IO ())
+shouldPassExamples verb = Map.fromList
     [ example "Array" (Array.verifySpec verb)
     , example "Arith" (Arith.verifySpec verb)
     , example "Clock" (Clock.verifySpec verb)

@@ -67,17 +67,17 @@ library copilot-verifier-examples
     copilot-verifier
   exposed-modules:
     Copilot.Verifier.Examples
-    Copilot.Verifier.Examples.Array
-    Copilot.Verifier.Examples.Arith
-    Copilot.Verifier.Examples.Clock
-    Copilot.Verifier.Examples.Counter
-    Copilot.Verifier.Examples.Engine
-    Copilot.Verifier.Examples.FPOps
-    Copilot.Verifier.Examples.Heater
-    Copilot.Verifier.Examples.IntOps
-    Copilot.Verifier.Examples.Structs
-    Copilot.Verifier.Examples.Voting
-    Copilot.Verifier.Examples.WCV
+    Copilot.Verifier.Examples.ShouldPass.Array
+    Copilot.Verifier.Examples.ShouldPass.Arith
+    Copilot.Verifier.Examples.ShouldPass.Clock
+    Copilot.Verifier.Examples.ShouldPass.Counter
+    Copilot.Verifier.Examples.ShouldPass.Engine
+    Copilot.Verifier.Examples.ShouldPass.FPOps
+    Copilot.Verifier.Examples.ShouldPass.Heater
+    Copilot.Verifier.Examples.ShouldPass.IntOps
+    Copilot.Verifier.Examples.ShouldPass.Structs
+    Copilot.Verifier.Examples.ShouldPass.Voting
+    Copilot.Verifier.Examples.ShouldPass.WCV
 
 executable verify-examples
   import: bldflags

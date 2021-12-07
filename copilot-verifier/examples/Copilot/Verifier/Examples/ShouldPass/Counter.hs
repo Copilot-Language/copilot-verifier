@@ -6,7 +6,7 @@
 
 {-# LANGUAGE RebindableSyntax #-}
 
-module Copilot.Verifier.Examples.Counter where
+module Copilot.Verifier.Examples.ShouldPass.Counter where
 
 import Control.Monad (when)
 import qualified Prelude as P
