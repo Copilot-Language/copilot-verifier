@@ -41,8 +41,7 @@ in Copilot denotes an infinite stream of values; one may
 just as well think that `Stream a` represents a pure mathematical
 function `ℕ → a` from natural numbers to values of type `a`.
 See the
-[Copilot manual]
-(https://ntrs.nasa.gov/api/citations/20200003164/downloads/20200003164.pdf)
+[Copilot manual](https://ntrs.nasa.gov/api/citations/20200003164/downloads/20200003164.pdf)
 for more details of the Copilot language itself and its semantics.
 
 One of the central design considerations for Copilot is that is should
@@ -220,9 +219,47 @@ functions must behave. The most important of those assumptions is that
 the trigger functions must not modify any memory under the control of
 the Copilot program, including its ring buffers and stack.  We also
 assume that the trigger functions are well defined, i.e. they are
-memory safe and do not perform any undefined behavior.  Finally, we
-assume that they implement "normal" control flow and will eventually
-return to their caller.  This last requirement may well be violated if
-the trigger function actually performs some aborting action, or
-otherwise halts normal execution; however, this seems relatively
-harmless from the point of view of correctness of the generated code.
+memory safe and do not perform any undefined behavior.
+
+### Caveats About the Verifier
+
+We rely on the `clang` compiler front-end to consume C source files
+and produce LLVM intermediate language, which then becomes the input
+to the later verification steps. To the extent that the input program
+is not fully-portable C, `clang` may make implementation-specific
+decisions about how to compile the program which might be made
+different if compiled by a different compiler, (e.g. `gcc`). We expect
+this aspect to be mitigated by the fact that Copilot programs are
+automatically generated into a rather simple subset of the C language,
+and is designed to be as simple as possible.
+Any code-generation bugs in `clang` itself may affect the soundness
+of our verifier. Again, however, Copilot generates a well-understood
+subset of the language, and we expect `clang` to be well-tested on
+the code patterns produced.
+
+The semantics of LLVM bitcode, as encoded in the `crucible-llvm`
+package, may have errors that affect soundness. We mitigate this risk
+by testing our semantics against a corpus of verification problems
+produced for the SV-COMP verification competition, paying special
+attention to any soundness issues that arise. `Crux`, a standalone
+verification system based on `crucible-llvm`, was a participant in the
+2022 edition of SV-COMP.
+
+The semantics of Copilot programs, as encoded in the
+`Copilot.Theorem.What4` module may have errors that affect soundness.
+For the moment we do not have an effective mitigation strategy for
+this risk other than manual examination and comparison against the
+intended semantics of Copilot, as encoded in the interpreter.
+
+There is limited SMT solver support for floating-point values,
+especially for trancendental functions like the trig primitives.  As a
+result, we reason about floating point expressions via uninterpreted
+functions. In other words, we leave the semantics of the
+floating-point operations totally abstract, and simply verify that the
+Copilot program and the corresponding C program apply the same
+operations in the same order. This is sound, but leaves the possibility
+that the compiler will apply some correct transformation to
+floating-point expressions that we are nonetheless unable to verify.
+However, on low optimizations and without the `--fast-math` flag,
+compilers generally (and `clang` in particular) are very reluctant to
+rearrange floating-point code, and the verifications generally succeed.
