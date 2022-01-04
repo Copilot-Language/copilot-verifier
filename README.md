@@ -76,7 +76,7 @@ compute the value of the corresponding stream expression
 evaluated at index `n`, assuming the C program has been fed
 inputs corresponding to the first `n` values of the external stream
 inputs.  Moreover, the trigger functions should be called from
-the `step` function exactly at time values when the stream expressions
+the `step` function exactly at the time values when the stream expressions
 evaluate to true.
 
 The notion of correspondence for the values flowing in streams is
@@ -84,7 +84,7 @@ relatively straightforward: these values consist of fixed-width
 machine integers, floating-point values, structs and fixed-length
 arrays. For each, the appropriate notion of equality is fairly clear.
 
-Both the original Stream program and the generated C program
+Both the original `Stream` program and the generated C program
 can be viewed straightforwardly as a transition system, and under
 this view, the correspondence we want to establish is a bisimulation
 between the states of the high-level stream program and the low-level
@@ -92,7 +92,7 @@ C program. The proof method for bisimulation requires us to provide
 a "correspondence" relation between the program states, and then prove
 three things about this relation:
 
-1. that the initial states of thee programs are in the relation;
+1. that the initial states of the programs are in the relation;
 2. if we assume two arbitrary program states begin in the relation
 and each takes a single transition (consuming corresponding inputs),
 the resulting states are back in the relation;
@@ -113,7 +113,7 @@ let `buf` be the global variable name of the ring-buffer in the C
 program, and `idx` be the global variable name maintaining the
 current index into the ring buffer.  Then the correspondence
 relation is basically that `0 <= idx < k` and
-`s[n+i] =buf[(idx+i) mod k]` as `i` ranges from `0 .. k-1`.
+`s[n+i] = buf[(idx+i) mod k]` as `i` ranges from `0 .. k-1`.
 By abuse of notation, here we mean that `s[j]` is
 the value of the stream expression `s` evaluated at index `j`,
 whereas `buf[j]` means the value obtained by reading the `j`th value
@@ -121,7 +121,7 @@ of the buffer `buf` from memory.  The overall correspondence relation
 is a conjunction of statements like this, one for each stream
 expression that is realized via a buffer.
 
-### Implementing the Bismulation proof steps
+### Implementing the Bisimulation proof steps
 
 The kind of program correspondence property we desire is a largely
 mechanical affair. As the code under consideration is automatically
@@ -171,12 +171,12 @@ compute the value of each stream at time `n+k`.
 
 Next we set up an initial state of the C program by choosing,
 for each ring buffer, an arbitrary value for its current index
-within it's allowed range, and then writing the variables
+within its allowed range, and then writing the variables
 corresponding to each stream value into the buffers at
 their appropriate offsets. The symbolic simulator is then
 invoked to compute the state update effects of the `step()`
 function. Afterward, we read the poststate values from the
-ring-buffers and verify that the correspond to the stream
+ring-buffers and verify that they correspond to the stream
 values from `n+1` up to `n+k`.
 
 As part of symbolic simulation, Crucible may also generate
@@ -188,7 +188,7 @@ submitted to an SMT solver.
 #### Observable effects
 
 For our purposes, the only observable effects of a Copilot program
-relate to any "trigger" functions defined in the spec.  Our task it to
+relate to any "trigger" functions defined in the spec.  Our task is to
 show that the generated C code calls the external trigger functions if
 and only if the corresponding guard condition is true, and that the
 arguments passed to those functions are as expected.
@@ -228,7 +228,7 @@ and produce LLVM intermediate language, which then becomes the input
 to the later verification steps. To the extent that the input program
 is not fully-portable C, `clang` may make implementation-specific
 decisions about how to compile the program which might be made
-different if compiled by a different compiler, (e.g. `gcc`). We expect
+different if compiled by a different compiler (e.g. `gcc`). We expect
 this aspect to be mitigated by the fact that Copilot programs are
 automatically generated into a rather simple subset of the C language,
 and is designed to be as simple as possible.
@@ -252,7 +252,7 @@ this risk other than manual examination and comparison against the
 intended semantics of Copilot, as encoded in the interpreter.
 
 There is limited SMT solver support for floating-point values,
-especially for trancendental functions like the trig primitives.  As a
+especially for transcendental functions like the trig primitives.  As a
 result, we reason about floating point expressions via uninterpreted
 functions. In other words, we leave the semantics of the
 floating-point operations totally abstract, and simply verify that the
