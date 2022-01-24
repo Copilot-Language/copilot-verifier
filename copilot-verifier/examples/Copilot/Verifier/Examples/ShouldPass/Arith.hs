@@ -8,7 +8,8 @@ import qualified Prelude as P
 
 import Language.Copilot
 import Copilot.Compile.C99
-import Copilot.Verifier (Verbosity(..), verifyWithVerbosity)
+import Copilot.Verifier ( Verbosity(..), VerifierOptions(..)
+                        , defaultVerifierOptions, verifyWithOptions )
 import Copilot.Theorem.What4 (prove, Solver(..))
 
 -- The largest unsigned 32-bit prime
@@ -45,6 +46,7 @@ verifySpec verb =
      r <- prove Z3 s
      when (verb P.== Noisy) $
        print r
-     verifyWithVerbosity verb mkDefaultCSettings ["reduced"] "multRingSpec" s
+     verifyWithOptions defaultVerifierOptions{verbosity = verb}
+                       mkDefaultCSettings ["reduced"] "multRingSpec" s
 
 --verifySpec _ = interpret 10 engineMonitor

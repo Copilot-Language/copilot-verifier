@@ -14,7 +14,8 @@ import Copilot.Compile.C99
 --import Copilot.Core.PrettyDot (prettyPrintDot)
 --import Copilot.Language.Prelude
 
-import Copilot.Verifier (Verbosity, verifyWithVerbosity)
+import Copilot.Verifier ( Verbosity, VerifierOptions(..)
+                        , defaultVerifierOptions, verifyWithOptions )
 
 import Prelude ()
 
@@ -37,7 +38,8 @@ spec = do
 
 -- Compile the spec
 verifySpec :: Verbosity -> IO ()
-verifySpec verb = reify spec >>= verifyWithVerbosity verb mkDefaultCSettings [] "heater"
+verifySpec verb = reify spec >>= verifyWithOptions defaultVerifierOptions{verbosity = verb}
+                                                   mkDefaultCSettings [] "heater"
 {-
   do spec' <- reify spec
      putStrLn $ prettyPrintDot spec'

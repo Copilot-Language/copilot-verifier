@@ -12,7 +12,8 @@ import qualified Prelude as P
 import Language.Copilot
 import Copilot.Compile.C99
 import Copilot.Theorem.What4
-import Copilot.Verifier (Verbosity(..), verifyWithVerbosity)
+import Copilot.Verifier ( Verbosity(..), VerifierOptions(..)
+                        , defaultVerifierOptions, verifyWithOptions )
 
 
 -- | Definition for `Volts`.
@@ -87,4 +88,5 @@ verifySpec verb = do
         Invalid -> putStrLn "invalid"
         Unknown -> putStrLn "unknown"
 
-  verifyWithVerbosity verb mkDefaultCSettings [] "structs" spec'
+  verifyWithOptions defaultVerifierOptions{verbosity = verb}
+                    mkDefaultCSettings [] "structs" spec'
