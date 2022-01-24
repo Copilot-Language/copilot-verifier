@@ -5,7 +5,8 @@ module Copilot.Verifier.Examples.ShouldPass.FPOps where
 
 import Copilot.Compile.C99 (mkDefaultCSettings)
 import qualified Copilot.Language.Stream as Copilot
-import Copilot.Verifier (Verbosity, verifyWithVerbosity)
+import Copilot.Verifier ( Verbosity, VerifierOptions(..)
+                        , defaultVerifierOptions, verifyWithOptions )
 import Data.Proxy (Proxy(..))
 import Language.Copilot
 import qualified Prelude as P
@@ -83,4 +84,5 @@ testOp2 op stream =
 verifySpec :: Verbosity -> IO ()
 verifySpec verb = do
   spec' <- reify spec
-  verifyWithVerbosity verb mkDefaultCSettings [] "fpOps" spec'
+  verifyWithOptions defaultVerifierOptions{verbosity = verb}
+                    mkDefaultCSettings [] "fpOps" spec'

@@ -10,7 +10,8 @@ module Copilot.Verifier.Examples.ShouldPass.Voting where
 
 import Language.Copilot
 import Copilot.Compile.C99
-import Copilot.Verifier (Verbosity, verifyWithVerbosity)
+import Copilot.Verifier ( Verbosity, VerifierOptions(..)
+                        , defaultVerifierOptions, verifyWithOptions )
 
 vote :: Spec
 vote = do
@@ -59,4 +60,5 @@ vote = do
 
 verifySpec :: Verbosity -> IO ()
 --verifySpec _ = interpret 30 vote
-verifySpec verb = reify vote >>= verifyWithVerbosity verb mkDefaultCSettings [] "voting"
+verifySpec verb = reify vote >>= verifyWithOptions defaultVerifierOptions{verbosity = verb}
+                                                   mkDefaultCSettings [] "voting"

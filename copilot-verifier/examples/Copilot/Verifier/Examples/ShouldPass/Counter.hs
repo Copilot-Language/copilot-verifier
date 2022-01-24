@@ -13,7 +13,8 @@ import qualified Prelude as P
 
 import Language.Copilot
 import Copilot.Compile.C99
-import Copilot.Verifier (Verbosity(..), verifyWithVerbosity)
+import Copilot.Verifier ( Verbosity(..), VerifierOptions(..)
+                        , defaultVerifierOptions, verifyWithOptions )
 import Copilot.Theorem.What4 (prove, Solver(..))
 
 -- A resettable counter
@@ -51,4 +52,5 @@ verifySpec verb =
      r <- prove Z3 s
      when (verb P.== Noisy) $
        print r
-     verifyWithVerbosity verb mkDefaultCSettings ["range", "range2"] "counter" s
+     verifyWithOptions defaultVerifierOptions{verbosity = verb}
+                       mkDefaultCSettings ["range", "range2"] "counter" s

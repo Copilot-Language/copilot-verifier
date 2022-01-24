@@ -2,7 +2,8 @@
 module Copilot.Verifier.Examples.ShouldPass.IntOps where
 
 import Copilot.Compile.C99 (mkDefaultCSettings)
-import Copilot.Verifier (Verbosity, verifyWithVerbosity)
+import Copilot.Verifier ( Verbosity, VerifierOptions(..)
+                        , defaultVerifierOptions, verifyWithOptions )
 import Language.Copilot
 import qualified Prelude as P
 
@@ -59,4 +60,5 @@ testOp2 op stream1 stream2 =
 verifySpec :: Verbosity -> IO ()
 verifySpec verb = do
   spec' <- reify spec
-  verifyWithVerbosity verb mkDefaultCSettings ["nonzero", "shiftByBits"] "intOps" spec'
+  verifyWithOptions defaultVerifierOptions{verbosity = verb}
+                    mkDefaultCSettings ["nonzero", "shiftByBits"] "intOps" spec'

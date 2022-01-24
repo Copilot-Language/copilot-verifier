@@ -15,8 +15,10 @@
 
 module Copilot.Verifier
   ( verify
+  , verifyWithOptions
+  , VerifierOptions(..)
+  , defaultVerifierOptions
   , Verbosity(..)
-  , verifyWithVerbosity
   ) where
 
 import Control.Lens (view, (^.), to)
@@ -148,7 +150,21 @@ import What4.Symbol (safeSymbol)
 -- @spec@ under the assumptions @props@ matches the behavior of the C program
 -- compiled with @csettings@ within a directory prefixed by @prefix@.
 verify :: CSettings -> [String] -> String -> Spec -> IO ()
-verify = verifyWithVerbosity Noisy
+verify = verifyWithOptions defaultVerifierOptions
+
+-- | Options for configuring the behavior of the verifier.
+newtype VerifierOptions = VerifierOptions
+  { verbosity :: Verbosity
+    -- ^ How much output the verifier should produce.
+  } deriving stock Show
+
+-- | The default 'VerifierOptions':
+--
+-- * Produce diagnostics as verification proceeds ('Noisy').
+defaultVerifierOptions :: VerifierOptions
+defaultVerifierOptions = VerifierOptions
+  { verbosity = Noisy
+  }
 
 -- | How much output should verification produce?
 data Verbosity
@@ -156,9 +172,10 @@ data Verbosity
   | Quiet -- ^ Don't produce any diagnostics.
   deriving stock (Eq, Show)
 
--- | Like 'verify', but with an option to control its 'Verbosity'.
-verifyWithVerbosity :: Verbosity -> CSettings -> [String] -> String -> Spec -> IO ()
-verifyWithVerbosity verb csettings0 properties prefix spec =
+-- | Like 'verify', but with 'VerifierOptions' to more finely control the
+-- verifier's behavior.
+verifyWithOptions :: VerifierOptions -> CSettings -> [String] -> String -> Spec -> IO ()
+verifyWithOptions opts csettings0 properties prefix spec =
   withCopilotLogging $
   do ocfg1 <- defaultOutputConfig copilotLoggingToSayWhat
      let ocfg2 mbOutputOpts = (ocfg1 mbOutputOpts) { Log._quiet = quiet }
@@ -195,7 +212,7 @@ verifyWithVerbosity verb csettings0 properties prefix spec =
 
      verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile
   where
-    quiet = verb == Quiet
+    quiet = verbosity opts == Quiet
 
 verifyBitcode ::
   Log.Logs msgs =>

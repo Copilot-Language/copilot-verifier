@@ -10,7 +10,8 @@ module Copilot.Verifier.Examples.ShouldPass.Engine where
 
 import Language.Copilot
 import Copilot.Compile.C99
-import Copilot.Verifier (Verbosity, verifyWithVerbosity)
+import Copilot.Verifier ( Verbosity, VerifierOptions(..)
+                        , defaultVerifierOptions, verifyWithOptions )
 
 import qualified Prelude as P
 
@@ -38,5 +39,6 @@ engineMonitor = do
   cooler = Just $ [True, True] P.++ repeat False
 
 verifySpec :: Verbosity -> IO ()
-verifySpec verb = reify engineMonitor >>= verifyWithVerbosity verb mkDefaultCSettings [] "engine"
+verifySpec verb = reify engineMonitor >>= verifyWithOptions defaultVerifierOptions{verbosity = verb}
+                                                            mkDefaultCSettings [] "engine"
 --verifySpec _ = interpret 10 engineMonitor

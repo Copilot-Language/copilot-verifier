@@ -15,7 +15,8 @@ module Copilot.Verifier.Examples.ShouldPass.Array where
 
 import Language.Copilot
 import Copilot.Compile.C99
-import Copilot.Verifier (Verbosity, verifyWithVerbosity)
+import Copilot.Verifier ( Verbosity, VerifierOptions(..)
+                        , defaultVerifierOptions, verifyWithOptions )
 
 -- Lets define an array of length 2.
 -- Make the buffer of the streams 3 elements long.
@@ -34,5 +35,6 @@ spec = do
 
 -- Compile the spec
 verifySpec :: Verbosity -> IO ()
-verifySpec verb = reify spec >>= verifyWithVerbosity verb mkDefaultCSettings [] "array"
+verifySpec verb = reify spec >>= verifyWithOptions defaultVerifierOptions{verbosity = verb}
+                                                   mkDefaultCSettings [] "array"
 -- verifySpec _ = interpret 30 spec

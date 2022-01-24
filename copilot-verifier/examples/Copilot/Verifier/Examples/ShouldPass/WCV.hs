@@ -11,7 +11,8 @@ module Copilot.Verifier.Examples.ShouldPass.WCV where
 import Language.Copilot
 import qualified Copilot.Theorem.What4 as CT
 import Copilot.Compile.C99
-import Copilot.Verifier (Verbosity, verifyWithVerbosity)
+import Copilot.Verifier ( Verbosity, VerifierOptions(..)
+                        , defaultVerifierOptions, verifyWithOptions )
 
 import qualified Prelude as P
 import Data.Foldable (forM_)
@@ -176,7 +177,8 @@ spec = do
 verifySpec :: Verbosity -> IO ()
 verifySpec verb = do
   spec' <- reify spec
-  verifyWithVerbosity verb mkDefaultCSettings [] "wcv" spec'
+  verifyWithOptions defaultVerifierOptions{verbosity = verb}
+                    mkDefaultCSettings [] "wcv" spec'
 
 {-
   -- Use Z3 to prove the properties.
