@@ -64,6 +64,7 @@ import Lang.Crucible.Backend
   , getProofObligations, clearProofObligations
   , LabeledPred(..), addDurableProofObligation
   , addAssumption, CrucibleAssumption(..), ppAbortExecReason
+  , IsSymBackend(..), HasSymInterface(..)
   -- , ProofObligations, proofGoal, goalsToList, labeledPredMsg
   )
 import Lang.Crucible.Backend.Simple (newSimpleBackend)
@@ -77,6 +78,7 @@ import Lang.Crucible.Simulator
   , readGlobal, writeGlobal, callCFG, emptyRegMap, RegEntry(..)
   , AbortedResult(..)
   )
+import Lang.Crucible.Simulator.ExecutionTree ( withBackend )
 import Lang.Crucible.Simulator.GlobalState ( insertGlobal )
 import Lang.Crucible.Simulator.RegValue (RegValue, RegValue'(..))
 import Lang.Crucible.Simulator.SimError (SimError(..), SimErrorReason(..)) -- ppSimError
@@ -136,7 +138,10 @@ import What4.Interface
   , getCurrentProgramLoc, printSymExpr
   , truePred, falsePred, eqPred, andPred, backendPred
   )
-import What4.Expr.Builder (FloatModeRepr(..), ExprBuilder, BoolExpr, startCaching)
+import What4.Expr.Builder
+  ( FloatModeRepr(..), ExprBuilder, BoolExpr, startCaching
+  , newExprBuilder
+  )
 import What4.InterpretedFloatingPoint
   ( FloatInfoRepr(..), IsInterpretedFloatExprBuilder(..)
   , SingleFloat, DoubleFloat
@@ -214,6 +219,8 @@ verifyWithOptions opts csettings0 properties prefix spec =
   where
     quiet = verbosity opts == Quiet
 
+data CopilotVerifierData t = CopilotVerifierData
+
 verifyBitcode ::
   Log.Logs msgs =>
   Log.SupportsCruxLogMessage msgs =>
@@ -227,18 +234,19 @@ verifyBitcode ::
   IO ()
 verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile =
   do halloc <- newHandleAllocator
-     sym <- newSimpleBackend FloatUninterpretedRepr globalNonceGenerator
+     sym <- newExprBuilder FloatUninterpretedRepr CopilotVerifierData globalNonceGenerator
+     bak <- newSimpleBackend sym
      -- turn on hash-consing
      startCaching sym
      bbMapRef <- newIORef mempty
-     let ?recordLLVMAnnotation = \an bb -> modifyIORef bbMapRef (Map.insert an bb)
+     let ?recordLLVMAnnotation = \stk an bb -> modifyIORef bbMapRef (Map.insert an (stk,bb))
 
      let adapters = [z3Adapter] -- TODO? configurable
      extendConfig (solver_adapter_config_options z3Adapter) (getConfiguration sym)
 
      memVar <- mkMemVar "llvm_memory" halloc
 
-     let simctx = (setupSimCtxt halloc sym (memOpts llvmOpts) memVar)
+     let simctx = (setupSimCtxt halloc bak (memOpts llvmOpts) memVar)
                   { printHandle = view Log.outputHandle ?outputConfig }
 
      llvmMod <- parseLLVM bcFile
@@ -255,8 +263,8 @@ verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile =
 
      llvmPtrWidth llvmCtxt $ \ptrW ->
        withPtrWidth ptrW $
-       do emptyMem   <- initializeAllMemory sym llvmCtxt llvmMod
-          initialMem <- populateAllGlobals sym (globalInitMap trans) emptyMem
+       do emptyMem   <- initializeAllMemory bak llvmCtxt llvmMod
+          initialMem <- populateAllGlobals bak (globalInitMap trans) emptyMem
 
           Log.sayCopilot Log.GeneratingProofState
           proofStateBundle <- CW4.computeBisimulationProofBundle sym properties spec
@@ -286,13 +294,13 @@ verifyInitialState ::
   CW4.BisimulationProofState sym ->
   IO ()
 verifyInitialState cruxOpts adapters bbMapRef simctx mem initialState =
-  do let sym = simctx^.ctxSymInterface
-     Log.sayCopilot $ Log.ComputingConditions Log.InitialState
-     frm <- pushAssumptionFrame sym
+  withBackend simctx $ \bak ->
+  do Log.sayCopilot $ Log.ComputingConditions Log.InitialState
+     frm <- pushAssumptionFrame bak
 
-     assertStateRelation sym mem initialState
+     assertStateRelation bak mem initialState
 
-     popUntilAssumptionFrame sym frm
+     popUntilAssumptionFrame bak frm
 
      Log.sayCopilot $ Log.ProvingConditions Log.InitialState
      proveObls cruxOpts adapters bbMapRef simctx
@@ -323,16 +331,16 @@ verifyStepBisimulation ::
   CW4.BisimulationProofBundle sym ->
   IO ()
 verifyStepBisimulation cruxOpts adapters csettings bbMapRef simctx llvmMod modTrans memVar mem prfbundle =
-  do let sym = simctx^.ctxSymInterface
-     Log.sayCopilot $ Log.ComputingConditions Log.StepBisimulation
+  withBackend simctx $ \bak ->
+  do Log.sayCopilot $ Log.ComputingConditions Log.StepBisimulation
 
-     frm <- pushAssumptionFrame sym
+     frm <- pushAssumptionFrame bak
 
      do -- set up the memory image
-        mem' <- setupPrestate sym mem prfbundle
+        mem' <- setupPrestate bak mem prfbundle
 
         -- sanity check, verify that we set up the memory in the expected relation
-        assertStateRelation sym mem' (CW4.preStreamState prfbundle)
+        assertStateRelation bak mem' (CW4.preStreamState prfbundle)
 
         -- set up trigger guard global variables
         let halloc = simHandleAllocator simctx
@@ -346,15 +354,15 @@ verifyStepBisimulation cruxOpts adapters csettings bbMapRef simctx llvmMod modTr
         mem'' <- executeStep csettings simctx memVar mem' llvmMod modTrans triggerGlobals overrides (CW4.assumptions prfbundle)
 
         -- assert the poststate is in the relation
-        assertStateRelation sym mem'' (CW4.postStreamState prfbundle)
+        assertStateRelation bak mem'' (CW4.postStreamState prfbundle)
 
-     popUntilAssumptionFrame sym frm
+     popUntilAssumptionFrame bak frm
 
      Log.sayCopilot $ Log.ProvingConditions Log.StepBisimulation
      proveObls cruxOpts adapters bbMapRef simctx
 
 
-triggerOverride ::
+triggerOverride :: forall sym t arch.
   IsSymInterface sym =>
   (?memOpts :: MemOptions) =>
   (?lc :: TypeContext) =>
@@ -372,10 +380,11 @@ triggerOverride (_,triggerGlobal,_) (nm, _guard, args) =
      Some argCtx ->
       basic_llvm_override $
       LLVMOverride decl argCtx UnitRepr $
-        \memOps sym calledArgs ->
-          do writeGlobal triggerGlobal (truePred sym)
+        \memOps bak calledArgs ->
+          do let sym = backendGetSym bak
+             writeGlobal triggerGlobal (truePred sym)
              mem <- readGlobal memOps
-             liftIO $ checkArgs sym mem (toListFC Some calledArgs) args
+             liftIO $ checkArgs bak mem (toListFC Some calledArgs) args
              return ()
 
  where
@@ -395,19 +404,24 @@ triggerOverride (_,triggerGlobal,_) (nm, _guard, args) =
   toTypeRepr (Some ctp, _) = llvmTypeAsRepr (copilotTypeToMemTypeCompositePtr (llvmDataLayout ?lc) ctp) Some
   llvmArgTy (Some ctp, _) = copilotTypeToLLVMTypeCompositePtr ctp
 
-  checkArgs sym mem = loop (0::Integer)
+  checkArgs :: forall bak. IsSymBackend sym bak =>
+    bak -> MemImpl sym -> [Some (RegEntry sym)] -> [(Some Type, CW4.XExpr sym)] -> IO ()
+  checkArgs bak mem = loop (0::Integer)
     where
-    loop i (x:xs) ((ctp,v):vs) = checkArg sym mem i x ctp v >> loop (i+1) xs vs
+    loop i (x:xs) ((ctp,v):vs) = checkArg bak mem i x ctp v >> loop (i+1) xs vs
     loop _ [] [] = return ()
     loop _ _ _ = fail $ "Argument list mismatch in " ++ nm
 
-  checkArg sym mem i (Some (RegEntry tp v)) (Some ctp) x =
-    do eq <- computeEqualVals sym mem ctp x tp v
+  checkArg :: forall bak. IsSymBackend sym bak =>
+    bak -> MemImpl sym -> Integer -> Some (RegEntry sym) -> Some Type -> CW4.XExpr sym -> IO ()
+  checkArg bak mem i (Some (RegEntry tp v)) (Some ctp) x =
+    do let sym = backendGetSym bak
+       eq <- computeEqualVals bak mem ctp x tp v
        let shortmsg = "Trigger " ++ show nm ++ " argument " ++ show i
        let longmsg  = show (printSymExpr eq)
        let rsn      = AssertFailureSimError shortmsg longmsg
        loc <- getCurrentProgramLoc sym
-       addDurableProofObligation sym (LabeledPred eq (SimError loc rsn))
+       addDurableProofObligation bak (LabeledPred eq (SimError loc rsn))
 
 
 executeStep :: forall sym arch.
@@ -447,7 +461,8 @@ executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerO
   dummyLoc = mkProgramLoc "<>" InternalPos
 
   assumeProperty b =
-    addAssumption sym (GenericAssumption dummyLoc "Property assumption" b)
+    withBackend simctx $ \bak ->
+      addAssumption bak (GenericAssumption dummyLoc "Property assumption" b)
 
   ppAbortedResult :: AbortedResult sym ext -> PP.Doc ann
   ppAbortedResult abortRes =
@@ -488,27 +503,30 @@ executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerO
             let shortmsg = "Trigger guard equality condition: " ++ show nm
             let longmsg  = show (printSymExpr eq)
             let rsn      = AssertFailureSimError shortmsg longmsg
-            liftIO $ addDurableProofObligation sym (LabeledPred eq (SimError dummyLoc rsn))
+            withBackend simctx $ \bak ->
+              liftIO $ addDurableProofObligation bak (LabeledPred eq (SimError dummyLoc rsn))
 
        -- return the final state of the memory
        readGlobal memVar
 
 setupPrestate ::
-  IsSymInterface sym =>
+  IsSymBackend sym bak =>
   HasPtrWidth wptr =>
   HasLLVMAnn sym =>
   (?memOpts :: MemOptions) =>
   (?lc :: TypeContext) =>
 
-  sym ->
+  bak ->
   MemImpl sym ->
   CW4.BisimulationProofBundle sym ->
   IO (MemImpl sym)
-setupPrestate sym mem0 prfbundle =
+setupPrestate bak mem0 prfbundle =
   do mem' <- foldM setupStreamState mem0 (CW4.streamState (CW4.preStreamState prfbundle))
      foldM setupExternalInput mem' (CW4.externalInputs prfbundle)
 
  where
+   sym = backendGetSym bak
+
    sizeTStorage :: StorageType
    sizeTStorage = bitvectorType (bitsToBytes (intValue ?ptrWidth))
 
@@ -520,11 +538,11 @@ setupPrestate sym mem0 prfbundle =
         Some typeRepr <- return (llvmTypeAsRepr memTy Some)
 
         -- resolve the global varible to a pointers
-        ptrVal <- doResolveGlobal sym mem (L.Symbol nm)
+        ptrVal <- doResolveGlobal bak mem (L.Symbol nm)
 
         -- write the value into the global
         regVal <- copilotExprToRegValue sym v typeRepr
-        doStore sym mem ptrVal typeRepr stType typeAlign regVal
+        doStore bak mem ptrVal typeRepr stType typeAlign regVal
 
    setupStreamState mem (nm, Some ctp, vs) =
      do -- TODO, should get these from somewhere inside copilot instead of building these names directly
@@ -540,8 +558,8 @@ setupPrestate sym mem0 prfbundle =
         Some typeRepr <- return (llvmTypeAsRepr memTy Some)
 
         -- Resolve the global names into base pointers
-        idxPtr <- doResolveGlobal sym mem (L.Symbol idxName)
-        bufPtr <- doResolveGlobal sym mem (L.Symbol bufName)
+        idxPtr <- doResolveGlobal bak mem (L.Symbol idxName)
+        bufPtr <- doResolveGlobal bak mem (L.Symbol bufName)
 
         -- Create a fresh index value in the proper range
         idxVal <- freshBoundedBV sym (safeSymbol idxName) ?ptrWidth
@@ -550,7 +568,7 @@ setupPrestate sym mem0 prfbundle =
 
         -- store the index value in the correct location
         let sizeTAlign = memTypeAlign (llvmDataLayout ?lc) (IntType (natValue ?ptrWidth))
-        mem' <- doStore sym mem idxPtr (LLVMPointerRepr ?ptrWidth) sizeTStorage sizeTAlign idxVal'
+        mem' <- doStore bak mem idxPtr (LLVMPointerRepr ?ptrWidth) sizeTStorage sizeTAlign idxVal'
 
         buflen'  <- bvLit sym ?ptrWidth (BV.mkBV ?ptrWidth buflen)
         typeLen' <- bvLit sym ?ptrWidth (BV.mkBV ?ptrWidth (toInteger typeLen))
@@ -565,27 +583,29 @@ setupPrestate sym mem0 prfbundle =
 
                regVal <- lift $ copilotExprToRegValue sym v typeRepr
                StateT $ \m ->
-                 do m' <- doStore sym m ptrVal typeRepr stType typeAlign regVal
+                 do m' <- doStore bak m ptrVal typeRepr stType typeAlign regVal
                     return ((),m')
 
 assertStateRelation ::
-  IsSymInterface sym =>
+  IsSymBackend sym bak =>
   HasPtrWidth wptr =>
   HasLLVMAnn sym =>
   (?memOpts :: MemOptions) =>
   (?lc :: TypeContext) =>
 
-  sym ->
+  bak ->
   MemImpl sym ->
   CW4.BisimulationProofState sym ->
   IO ()
-assertStateRelation sym mem prfst =
+assertStateRelation bak mem prfst =
   -- For each stream in the proof state, assert that the
   -- generated ring buffer global contains the corresponding
   -- values.
   forM_ (CW4.streamState prfst) assertStreamState
 
  where
+   sym = backendGetSym bak
+
    sizeTStorage :: StorageType
    sizeTStorage = bitvectorType (bitsToBytes (intValue ?ptrWidth))
 
@@ -603,13 +623,13 @@ assertStateRelation sym mem prfst =
         Some typeRepr <- return (llvmTypeAsRepr memTy Some)
 
         -- Resolve the global names into base pointers
-        idxPtr <- doResolveGlobal sym mem (L.Symbol idxName)
-        bufPtr <- doResolveGlobal sym mem (L.Symbol bufName)
+        idxPtr <- doResolveGlobal bak mem (L.Symbol idxName)
+        bufPtr <- doResolveGlobal bak mem (L.Symbol bufName)
 
         -- read the value of the ring buffer index
         let sizeTAlign = memTypeAlign (llvmDataLayout ?lc) (IntType (natValue ?ptrWidth))
-        idxVal <- projectLLVM_bv sym =<<
-          doLoad sym mem idxPtr sizeTStorage (LLVMPointerRepr ?ptrWidth) sizeTAlign
+        idxVal <- projectLLVM_bv bak =<<
+          doLoad bak mem idxPtr sizeTStorage (LLVMPointerRepr ?ptrWidth) sizeTAlign
 
         buflen'  <- bvLit sym ?ptrWidth (BV.mkBV ?ptrWidth buflen)
         typeLen' <- bvLit sym ?ptrWidth (BV.mkBV ?ptrWidth (toInteger typeLen))
@@ -623,13 +643,13 @@ assertStateRelation sym mem prfst =
                   x3 <- bvMul sym x2 typeLen'
                   ptrAdd sym ?ptrWidth bufPtr x3
 
-             v' <- doLoad sym mem ptrVal stType typeRepr typeAlign
-             eq <- computeEqualVals sym mem ctp v typeRepr v'
+             v' <- doLoad bak mem ptrVal stType typeRepr typeAlign
+             eq <- computeEqualVals bak mem ctp v typeRepr v'
              let shortmsg = "State equality condition: " ++ show nm ++ " index value " ++ show i
              let longmsg  = show (printSymExpr eq)
              let rsn      = AssertFailureSimError shortmsg longmsg
              let loc      = mkProgramLoc "<>" InternalPos
-             addDurableProofObligation sym (LabeledPred eq (SimError loc rsn))
+             addDurableProofObligation bak (LabeledPred eq (SimError loc rsn))
 
         return ()
 
@@ -680,42 +700,44 @@ copilotExprToRegValue sym = loop
       fail $ unlines ["Mismatch between Copilot value and crucible value", show x, show tpr]
 
 
-computeEqualVals :: forall sym tp a wptr.
-  IsSymInterface sym =>
+computeEqualVals :: forall sym bak tp a wptr.
+  IsSymBackend sym bak =>
   HasPtrWidth wptr =>
   HasLLVMAnn sym =>
   (?lc :: TypeContext) =>
   (?memOpts :: MemOptions) =>
-  sym ->
+  bak ->
   MemImpl sym ->
   Type a ->
   CW4.XExpr sym ->
   TypeRepr tp ->
   RegValue sym tp ->
   IO (Pred sym)
-computeEqualVals sym mem = loop
+computeEqualVals bak mem = loop
   where
+    sym = backendGetSym bak
+
     loop :: forall tp' a'. Type a' -> CW4.XExpr sym -> TypeRepr tp' -> RegValue sym tp' -> IO (Pred sym)
     loop Bool (CW4.XBool b) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @1) =
-      isEq sym b =<< bvIsNonzero sym =<< projectLLVM_bv sym v
+      isEq sym b =<< bvIsNonzero sym =<< projectLLVM_bv bak v
     loop Bool (CW4.XBool b) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @8) =
-      isEq sym b =<< bvIsNonzero sym =<< projectLLVM_bv sym v
+      isEq sym b =<< bvIsNonzero sym =<< projectLLVM_bv bak v
     loop Int8 (CW4.XInt8 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @8) =
-      bvEq sym x =<< projectLLVM_bv sym v
+      bvEq sym x =<< projectLLVM_bv bak v
     loop Int16 (CW4.XInt16 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @16) =
-      bvEq sym x =<< projectLLVM_bv sym v
+      bvEq sym x =<< projectLLVM_bv bak v
     loop Int32 (CW4.XInt32 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @32) =
-      bvEq sym x =<< projectLLVM_bv sym v
+      bvEq sym x =<< projectLLVM_bv bak v
     loop Int64 (CW4.XInt64 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @64) =
-      bvEq sym x =<< projectLLVM_bv sym v
+      bvEq sym x =<< projectLLVM_bv bak v
     loop Word8 (CW4.XWord8 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @8) =
-      bvEq sym x =<< projectLLVM_bv sym v
+      bvEq sym x =<< projectLLVM_bv bak v
     loop Word16 (CW4.XWord16 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @16) =
-      bvEq sym x =<< projectLLVM_bv sym v
+      bvEq sym x =<< projectLLVM_bv bak v
     loop Word32 (CW4.XWord32 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @32) =
-      bvEq sym x =<< projectLLVM_bv sym v
+      bvEq sym x =<< projectLLVM_bv bak v
     loop Word64 (CW4.XWord64 x) (LLVMPointerRepr w) v | Just Refl <- testEquality w (knownNat @64) =
-      bvEq sym x =<< projectLLVM_bv sym v
+      bvEq sym x =<< projectLLVM_bv bak v
 
     loop Float (CW4.XFloat x)  (FloatRepr SingleFloatRepr) v = iFloatEq @_ @SingleFloat sym x v
     loop Double (CW4.XDouble x) (FloatRepr DoubleFloatRepr) v = iFloatEq @_ @DoubleFloat sym x v
@@ -752,7 +774,7 @@ computeEqualVals sym mem = loop
              typeAlign = memTypeAlign (llvmDataLayout ?lc) memTy
          stp <- toStorableType memTy
          llvmTypeAsRepr memTy $ \tpr ->
-           do regVal <- doLoad sym mem v stp tpr typeAlign
+           do regVal <- doLoad bak mem v stp tpr typeAlign
               loop ctp x tpr regVal
 
     loop _ctp x tpr _v =
@@ -931,9 +953,10 @@ proveObls ::
   SimCtxt Crux sym LLVM ->
   IO ()
 proveObls cruxOpts adapters bbMapRef simctx =
-  do let sym = simctx^.ctxSymInterface
-     obls <- getProofObligations sym
-     clearProofObligations sym
+  withBackend simctx $ \bak ->
+  do let sym = backendGetSym bak
+     obls <- getProofObligations bak
+     clearProofObligations bak
 
 --     mapM_ (print . ppSimError) (summarizeObls sym obls)
 
