@@ -182,73 +182,99 @@ data Verbosity
 verifyWithOptions :: VerifierOptions -> CSettings -> [String] -> String -> Spec -> IO ()
 verifyWithOptions opts csettings0 properties prefix spec =
   withCopilotLogging $
-  do ocfg1 <- defaultOutputConfig copilotLoggingToSayWhat
-     let ocfg2 mbOutputOpts = (ocfg1 mbOutputOpts) { Log._quiet = quiet }
-     (cruxOpts, llvmOpts, csettings, csrc) <-
-       do llvmcfg <- llvmCruxConfig
-          let cfg = cfgJoin cruxOptions llvmcfg
-          -- TODO, load from and actual configuration file?
-          fileOpts <- fromFile "copilot-verifier" cfg Nothing
-          (cruxOpts0, llvmOpts0) <- foldM fromEnv fileOpts (cfgEnv cfg)
-          let odir0 = cSettingsOutputDirectory csettings0
-          let odir = -- A bit grimy, but this corresponds to how crux-llvm sets
-                     -- its output directory.
-                     if odir0 == "."
-                       then "results" </> prefix
-                       else odir0
-          let csettings = csettings0{ cSettingsOutputDirectory = odir }
-          let csrc = odir </> prefix ++ ".c"
-          let cruxOpts1 = cruxOpts0{ outDir = odir, bldDir = odir, inputFiles = [csrc]
-                                   , outputOptions = (outputOptions cruxOpts0)
-                                                       { quietMode = quiet
-                                                       }
-                                   }
-          let ?outputConfig = ocfg2 (Just (outputOptions cruxOpts1))
-          cruxOpts2 <- postprocessOptions cruxOpts1
-          (cruxOpts3, llvmOpts2) <- processLLVMOptions (cruxOpts2, llvmOpts0{ optLevel = 0 })
-          return (cruxOpts3, llvmOpts2, csettings, csrc)
+  do -- munge options structures into the necessary forms
+     (ocfg, cruxOpts, llvmOpts, csettings, csrc) <- computeConfiguration opts csettings0 prefix
+     let ?outputConfig = ocfg
 
+     -- Compile the Copilot spec into C source code, using
+     -- preexisting Copilot library calls.
      compileWith csettings prefix spec
-     let ?outputConfig = ocfg2 (Just (outputOptions cruxOpts))
      Log.sayCopilot $ Log.GeneratedCFile csrc
 
+     -- Compile the C source into LLVM bitcode, using preexisting
+     -- Crux library calls.
      bcFile <- genBitCode cruxOpts llvmOpts
      Log.sayCopilot $ Log.CompiledBitcodeFile prefix bcFile
 
+     -- Run the main verification procedure
      verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile
-  where
-    quiet = verbosity opts == Quiet
+
+
+-- | Do the (surprisingly large amount) of options munging necessary to set up
+--   the crucible/crux environment.
+computeConfiguration ::
+  Log.SupportsCruxLogMessage CopilotLogging =>
+  VerifierOptions -> CSettings -> FilePath ->
+  IO (Log.OutputConfig CopilotLogging, CruxOptions, LLVMOptions, CSettings, FilePath)
+computeConfiguration opts csettings0 prefix =
+  do ocfg1 <- defaultOutputConfig copilotLoggingToSayWhat
+     let quiet = verbosity opts == Quiet
+     let ocfg2 mbOutputOpts = (ocfg1 mbOutputOpts) { Log._quiet = quiet }
+     llvmcfg <- llvmCruxConfig
+     let cfg = cfgJoin cruxOptions llvmcfg
+     -- TODO, load from an actual configuration file?
+     fileOpts <- fromFile "copilot-verifier" cfg Nothing
+     (cruxOpts0, llvmOpts0) <- foldM fromEnv fileOpts (cfgEnv cfg)
+     let odir0 = cSettingsOutputDirectory csettings0
+     let odir = -- A bit grimy, but this corresponds to how crux-llvm sets
+                -- its output directory.
+                if odir0 == "."
+                  then "results" </> prefix
+                  else odir0
+     let csettings = csettings0{ cSettingsOutputDirectory = odir }
+     let csrc = odir </> prefix ++ ".c"
+     let cruxOpts1 = cruxOpts0{ outDir = odir, bldDir = odir, inputFiles = [csrc]
+                              , outputOptions = (outputOptions cruxOpts0)
+                                                  { quietMode = quiet
+                                                  }
+                              }
+     let ?outputConfig = ocfg2 (Just (outputOptions cruxOpts1))
+     cruxOpts2 <- postprocessOptions cruxOpts1
+
+     -- NB, we are fixing the optimization level to -O0 here
+     (cruxOpts3, llvmOpts2) <- processLLVMOptions (cruxOpts2, llvmOpts0{ optLevel = 0 })
+
+     let ocfg3 = ocfg2 (Just (outputOptions cruxOpts3))
+     return (ocfg3, cruxOpts3, llvmOpts2, csettings, csrc)
+
 
 data CopilotVerifierData t = CopilotVerifierData
 
+
+-- | Main entry point for the verifier.
 verifyBitcode ::
   Log.Logs msgs =>
   Log.SupportsCruxLogMessage msgs =>
   Log.SupportsCopilotLogMessage msgs =>
-  CSettings ->
-  [String] ->
-  Spec ->
-  CruxOptions ->
-  LLVMOptions ->
-  FilePath ->
+  CSettings   {- ^ Settings used to compile the Copilot spec. Used to find the names of functions and variables. -} ->
+  [String]    {- ^ Names of properties to assume during verification. -} ->
+  Spec        {- ^ The input Copilot specification -} ->
+  CruxOptions {- ^ Crux options -} ->
+  LLVMOptions {- ^ CruxLLVM options -} ->
+  FilePath    {- ^ Path to the bitcode file to verify -} -> 
   IO ()
 verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile =
-  do halloc <- newHandleAllocator
+  do -- Set up the expression builder and symbolic backend
+     halloc <- newHandleAllocator
      sym <- newExprBuilder FloatUninterpretedRepr CopilotVerifierData globalNonceGenerator
      bak <- newSimpleBackend sym
      -- turn on hash-consing
      startCaching sym
+
+     -- capture LLVM side-condition information for use in error reporting
      bbMapRef <- newIORef mempty
      let ?recordLLVMAnnotation = \stk an bb -> modifyIORef bbMapRef (Map.insert an (stk,bb))
 
+     -- Set up the solver to use for verification.  Right now we hard-code this to Z3.
      let adapters = [z3Adapter] -- TODO? configurable
      extendConfig (solver_adapter_config_options z3Adapter) (getConfiguration sym)
 
+     -- Set up the Crucible/LLVM simulation context
      memVar <- mkMemVar "llvm_memory" halloc
-
      let simctx = (setupSimCtxt halloc bak (memOpts llvmOpts) memVar)
                   { printHandle = view Log.outputHandle ?outputConfig }
 
+     -- Load and translate the input LLVM module
      llvmMod <- parseLLVM bcFile
      (Some trans, _warns) <-
         let ?transOpts = transOpts llvmOpts
@@ -256,6 +282,9 @@ verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile =
 
      Log.sayCopilot Log.TranslatedToCrucible
 
+     -- Grab some metadata from the bitcode file and options;
+     -- make the available via implicit arguments to the places
+     -- that expect them.
      let llvmCtxt = trans ^. transContext
      let ?lc = llvmCtxt ^. llvmTypeCtx
      let ?memOpts = memOpts llvmOpts
@@ -263,18 +292,33 @@ verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile =
 
      llvmPtrWidth llvmCtxt $ \ptrW ->
        withPtrWidth ptrW $
-       do emptyMem   <- initializeAllMemory bak llvmCtxt llvmMod
+
+       do -- Compute the LLVM memory state with global variables allocated
+          -- but not initialized
+          emptyMem   <- initializeAllMemory bak llvmCtxt llvmMod
+
+          -- Compute the LLVM memory state with global variables initialized
+          -- to their initial values.
           initialMem <- populateAllGlobals bak (globalInitMap trans) emptyMem
 
+          -- Use the Copilot spec directly to compute the symbolic states
+          -- necessary to carry out the states of the bisimulation proof.
           Log.sayCopilot Log.GeneratingProofState
           proofStateBundle <- CW4.computeBisimulationProofBundle sym properties spec
 
+          -- First check that the initial state of the program matches the starting
+          -- segment of the associated Copilot streams.
           verifyInitialState cruxOpts adapters bbMapRef simctx initialMem
              (CW4.initialStreamState proofStateBundle)
 
+          -- Now, the real meat. Carry out the bisimulation step of the proof.
           verifyStepBisimulation cruxOpts adapters csettings
              bbMapRef simctx llvmMod trans memVar emptyMem proofStateBundle
 
+
+-- | Prove that the state of the global variables at program startup
+--   matches the expected initial segments of the associated Copilot
+--   streams.
 verifyInitialState ::
   IsSymInterface sym =>
   Log.Logs msgs =>
@@ -304,6 +348,7 @@ verifyInitialState cruxOpts adapters bbMapRef simctx mem initialState =
 
      Log.sayCopilot $ Log.ProvingConditions Log.InitialState
      proveObls cruxOpts adapters bbMapRef simctx
+
 
 verifyStepBisimulation ::
   IsSymInterface sym =>
@@ -362,6 +407,23 @@ verifyStepBisimulation cruxOpts adapters csettings bbMapRef simctx llvmMod modTr
      proveObls cruxOpts adapters bbMapRef simctx
 
 
+-- | Set up the "trigger override" functions.  These dummy functions
+--   take the place of the external functions called by the Copilot
+--   monitor when a guarded condition occurs.
+--
+--   Each trigger statement has a corresponding global variable that
+--   is used to record if the trigger function was called; initially
+--   the global is false, and is set to true when the trigger function
+--   is called.  At the end of verification, we check that the value
+--   of this global variable is true iff the corresponding trigger guard
+--   condition is true.
+--
+--   The other function of the trigger overrides is to check that, when called,
+--   the functions are given the expected argument values.
+--
+--   Otherwise, the override functions have no effects, which corresponds
+--   to the assumption that the external environment makes no changes to the
+--   program state that are observable to the Copilot monitor.
 triggerOverride :: forall sym t arch.
   IsSymInterface sym =>
   (?memOpts :: MemOptions) =>
@@ -424,6 +486,13 @@ triggerOverride (_,triggerGlobal,_) (nm, _guard, args) =
        addDurableProofObligation bak (LabeledPred eq (SimError loc rsn))
 
 
+-- | Actually execute the Crucible simulator on the generated "step" function.
+--   This will record proof side-conditions into the symbolic backend, and
+--   return the memory state corresponding to the function post-state.
+--
+--   This function will record side-conditions that arise from the semantics
+--   of C itself (e.g., memory is accessed in bounds and signed arithmetic
+--   doesn't overflow) as well as the conditions related to trigger functions.
 executeStep :: forall sym arch.
   IsSymInterface sym =>
   (?memOpts :: MemOptions) =>
@@ -451,6 +520,7 @@ executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerO
        FinishedResult _ pr -> return (pr^.partialValue.gpValue.to regValue)
        AbortedResult _ abortRes -> fail $ show $ ppAbortedResult abortRes
        TimeoutResult{} -> fail "simulation timed out!"
+
  where
   setupTrigger gs (_,gv,_) = insertGlobal gv (falsePred sym) gs
   globSt = foldl setupTrigger (llvmGlobals memVar mem) triggerGlobals
@@ -458,6 +528,9 @@ executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerO
   stepName = cSettingsStepFunctionName csettings
   sym = simctx^.ctxSymInterface
 
+  -- TODO, would be lovely to be able to do better than dummy positions for all these things
+  -- so we can correspond assumptions and asserts back to the parts of the original spec that
+  -- gave rise to them.
   dummyLoc = mkProgramLoc "<>" InternalPos
 
   assumeProperty b =
@@ -479,9 +552,10 @@ executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerO
   gatherReasons (AbortedBranch _ _ t f) =
     gatherReasons t <> gatherReasons f
 
+  -- Simulator entry point
   runStep :: OverrideSim (Crux sym) sym LLVM (RegEntry sym Mem) EmptyCtx Mem (MemImpl sym)
   runStep =
-    do -- set up built-in functions
+    do -- set up built-in functions and trigger overrides
        register_llvm_overrides llvmmod [] triggerOverrides llvm_ctx
        -- set up functions defined in the module
        mapM_ (registerModuleFn llvm_ctx) (Map.elems (cfgMap modTrans))
@@ -489,7 +563,7 @@ executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerO
        -- make any property assumptions
        liftIO (mapM_ assumeProperty assums)
 
-       -- look up and run the step function
+       -- look up and call the step function
        () <- case Map.lookup (L.Symbol stepName) (cfgMap modTrans) of
          Just (_, AnyCFG anyCfg) ->
            case (cfgArgTypes anyCfg, cfgReturnType anyCfg) of
@@ -497,6 +571,7 @@ executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerO
              _ -> fail $ unwords [show stepName, "should take no arguments and return void"]
          Nothing -> fail $ unwords ["Could not find step function named", show stepName]
 
+       -- Assert that the trigger functions were called iff the associated guard condition was true
        forM_ triggerGlobals $ \(nm, gv, guard) ->
          do guard' <- readGlobal gv
             eq <- liftIO $ eqPred sym guard guard'
@@ -509,6 +584,10 @@ executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerO
        -- return the final state of the memory
        readGlobal memVar
 
+-- | Given a bisimulation proof bundle and an empty initial state,
+--   populate the global ring-buffer variables with abstract state
+--   values, and write the abstract values of the external stream
+--   values into their proper locations.
 setupPrestate ::
   IsSymBackend sym bak =>
   HasPtrWidth wptr =>
@@ -537,7 +616,7 @@ setupPrestate bak mem0 prfbundle =
         stType <- toStorableType memTy
         Some typeRepr <- return (llvmTypeAsRepr memTy Some)
 
-        -- resolve the global varible to a pointers
+        -- resolve the global variable to a pointers
         ptrVal <- doResolveGlobal bak mem (L.Symbol nm)
 
         -- write the value into the global
@@ -573,6 +652,7 @@ setupPrestate bak mem0 prfbundle =
         buflen'  <- bvLit sym ?ptrWidth (BV.mkBV ?ptrWidth buflen)
         typeLen' <- bvLit sym ?ptrWidth (BV.mkBV ?ptrWidth (toInteger typeLen))
 
+        -- Write each value of the stream ring buffer into its correct location
         flip execStateT mem' $
           forM_ (zip vs [0 ..]) $ \(v,i) ->
             do ptrVal <- lift $
@@ -586,6 +666,10 @@ setupPrestate bak mem0 prfbundle =
                  do m' <- doStore bak m ptrVal typeRepr stType typeAlign regVal
                     return ((),m')
 
+-- | Given a memory image and a "proof state", assert that the global values
+--   for each stream ring buffer have values that correspond to the given
+--   stream state. This collection of assertions defines the bisimulation
+--   relation.
 assertStateRelation ::
   IsSymBackend sym bak =>
   HasPtrWidth wptr =>
@@ -653,6 +737,8 @@ assertStateRelation bak mem prfst =
 
         return ()
 
+-- | Translate the @XExpr@ values from the "Copilot.Theorem.What4" module into
+--   Crucible @RegValue@s suitable for injection into the Crucible simulator.
 copilotExprToRegValue :: forall sym tp.
   IsSymInterface sym =>
   sym ->
@@ -700,6 +786,11 @@ copilotExprToRegValue sym = loop
       fail $ unlines ["Mismatch between Copilot value and crucible value", show x, show tpr]
 
 
+-- | Given an @XExpr@ from from the "Copilot.Theorem.What4" module, and
+--   a Crucible @RegValue@ which is expected to match, compute an equality
+--   predicate between the values.  The Crucible values may be pointers,
+--   requiring us to resolve the indirection through memory; this is necessary
+--   for array and struct values, but would also work for scalars.
 computeEqualVals :: forall sym bak tp a wptr.
   IsSymBackend sym bak =>
   HasPtrWidth wptr =>
@@ -924,7 +1015,7 @@ arguments to a function. This impedance mismatch is handled in two places:
    override for a trigger function (see `triggerOverride`).
 2. The `computeEqualVals` function has a special case for pointer
    arguments—see the case that matches on `PtrRepr`. When a `PtrRepr` is
-   encounted, the underlying array values that it points to are read from
+   encountered, the underlying array values that it points to are read from
    memory. Because `PtrRepr` doesn't record the type of the thing being pointed
    to, `computeEqualVals` uses the corresponding Copilot type as a guide to
    determine how much memory to read and at what type the memory should be
@@ -941,6 +1032,12 @@ in trigger functions (e.g., `void trigger(struct s *ss)`), so we must also load
 from a `PtrRepr` in `computeEqualVals` to handle structs.
 -}
 
+
+-- | Given a simulator state, extract any collected proof obligations,
+--   attempt to prove them, and present the results to the user.
+--
+--   Afterward, the simulator state will be cleared of any proof obligations,
+--   regardless of if they could all be proved.
 proveObls ::
   IsSymInterface sym =>
   sym ~ ExprBuilder t st fs =>
