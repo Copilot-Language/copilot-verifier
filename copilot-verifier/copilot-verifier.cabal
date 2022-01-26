@@ -24,7 +24,7 @@ common bldflags
      NondecreasingIndentation
   build-depends:
     aeson >= 1.5 && < 2.1,
-    base >= 4.8 && < 4.15,
+    base >= 4.8 && < 4.16,
     bv-sized >= 1.0.0 && < 1.1,
     bytestring,
     containers >= 0.5.9.0,
