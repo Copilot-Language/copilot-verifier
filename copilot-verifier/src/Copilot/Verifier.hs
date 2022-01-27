@@ -18,11 +18,12 @@ module Copilot.Verifier
   , verifyWithOptions
   , VerifierOptions(..)
   , defaultVerifierOptions
+  , sideCondVerifierOptions
   , Verbosity(..)
   ) where
 
 import Control.Lens (view, (^.), to)
-import Control.Monad (foldM, forM_)
+import Control.Monad (foldM, forM_, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State (execStateT, lift, StateT(..))
 import Data.Aeson (ToJSON)
@@ -158,17 +159,39 @@ verify :: CSettings -> [String] -> String -> Spec -> IO ()
 verify = verifyWithOptions defaultVerifierOptions
 
 -- | Options for configuring the behavior of the verifier.
-newtype VerifierOptions = VerifierOptions
+data VerifierOptions = VerifierOptions
   { verbosity :: Verbosity
     -- ^ How much output the verifier should produce.
+  , assumePartialSideConds :: Bool
+    -- ^ If 'True', the verifier will determine the conditions under which
+    --   a Copilot specification's partial operations are well defined and
+    --   add these side conditions as assumptions. As a result, even if the
+    --   generated C code performs a partial operation, the verification will
+    --   succeed if this partial operation coincides with a corresponding
+    --   operation on the Copilot side.
+    --
+    --   If 'False', the verifier will not assume any side conditions related
+    --   to partial operations in the Copilot specification. As a result, any
+    --   use of a partial operation in the generated C code will cause
+    --   verification to fail unless the user adds their own assumptions.
   } deriving stock Show
 
 -- | The default 'VerifierOptions':
 --
 -- * Produce diagnostics as verification proceeds ('Noisy').
+--
+-- * Do not assume any side conditions related to partial operations.
 defaultVerifierOptions :: VerifierOptions
 defaultVerifierOptions = VerifierOptions
   { verbosity = Noisy
+  , assumePartialSideConds = False
+  }
+
+-- | Like 'defaultVerifierOptions', except that the verifier will assume side
+-- conditions related to partial operations used in the Copilot spec.
+sideCondVerifierOptions :: VerifierOptions
+sideCondVerifierOptions = defaultVerifierOptions
+  { assumePartialSideConds = True
   }
 
 -- | How much output should verification produce?
@@ -197,7 +220,7 @@ verifyWithOptions opts csettings0 properties prefix spec =
      Log.sayCopilot $ Log.CompiledBitcodeFile prefix bcFile
 
      -- Run the main verification procedure
-     verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile
+     verifyBitcode opts csettings properties spec cruxOpts llvmOpts bcFile
 
 
 -- | Do the (surprisingly large amount) of options munging necessary to set up
@@ -246,14 +269,15 @@ verifyBitcode ::
   Log.Logs msgs =>
   Log.SupportsCruxLogMessage msgs =>
   Log.SupportsCopilotLogMessage msgs =>
+  VerifierOptions {- ^ Verifier-specific settings -} ->
   CSettings   {- ^ Settings used to compile the Copilot spec. Used to find the names of functions and variables. -} ->
   [String]    {- ^ Names of properties to assume during verification. -} ->
   Spec        {- ^ The input Copilot specification -} ->
   CruxOptions {- ^ Crux options -} ->
   LLVMOptions {- ^ CruxLLVM options -} ->
-  FilePath    {- ^ Path to the bitcode file to verify -} -> 
+  FilePath    {- ^ Path to the bitcode file to verify -} ->
   IO ()
-verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile =
+verifyBitcode opts csettings properties spec cruxOpts llvmOpts bcFile =
   do -- Set up the expression builder and symbolic backend
      halloc <- newHandleAllocator
      sym <- newExprBuilder FloatUninterpretedRepr CopilotVerifierData globalNonceGenerator
@@ -312,7 +336,7 @@ verifyBitcode csettings properties spec cruxOpts llvmOpts bcFile =
              (CW4.initialStreamState proofStateBundle)
 
           -- Now, the real meat. Carry out the bisimulation step of the proof.
-          verifyStepBisimulation cruxOpts adapters csettings
+          verifyStepBisimulation opts cruxOpts adapters csettings
              bbMapRef simctx llvmMod trans memVar emptyMem proofStateBundle
 
 
@@ -364,6 +388,7 @@ verifyStepBisimulation ::
   (?lc :: TypeContext) =>
   (?intrinsicsOpts :: IntrinsicsOptions) =>
 
+  VerifierOptions ->
   CruxOptions ->
   [SolverAdapter st] ->
   CSettings ->
@@ -375,7 +400,7 @@ verifyStepBisimulation ::
   MemImpl sym ->
   CW4.BisimulationProofBundle sym ->
   IO ()
-verifyStepBisimulation cruxOpts adapters csettings bbMapRef simctx llvmMod modTrans memVar mem prfbundle =
+verifyStepBisimulation opts cruxOpts adapters csettings bbMapRef simctx llvmMod modTrans memVar mem prfbundle =
   withBackend simctx $ \bak ->
   do Log.sayCopilot $ Log.ComputingConditions Log.StepBisimulation
 
@@ -396,7 +421,7 @@ verifyStepBisimulation cruxOpts adapters csettings bbMapRef simctx llvmMod modTr
 
         -- execute the step function
         let overrides = zipWith triggerOverride triggerGlobals (CW4.triggerState prfbundle)
-        mem'' <- executeStep csettings simctx memVar mem' llvmMod modTrans triggerGlobals overrides (CW4.assumptions prfbundle)
+        mem'' <- executeStep opts csettings simctx memVar mem' llvmMod modTrans triggerGlobals overrides (CW4.assumptions prfbundle) (CW4.sideConds prfbundle)
 
         -- assert the poststate is in the relation
         assertStateRelation bak mem'' (CW4.postStreamState prfbundle)
@@ -502,6 +527,7 @@ executeStep :: forall sym arch.
   HasPtrWidth (ArchWidth arch) =>
   HasLLVMAnn sym =>
 
+  VerifierOptions ->
   CSettings ->
   SimCtxt Crux sym LLVM ->
   GlobalVar Mem ->
@@ -510,9 +536,10 @@ executeStep :: forall sym arch.
   ModuleTranslation arch ->
   [(Name, GlobalVar BoolType, Pred sym)] ->
   [OverrideTemplate (Crux sym) sym arch (RegEntry sym Mem) EmptyCtx Mem] ->
-  [Pred sym] ->
+  [Pred sym] {- User-provided property assumptions -} ->
+  [Pred sym] {- Side conditions related to partial operations -} ->
   IO (MemImpl sym)
-executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerOverrides assums =
+executeStep opts csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerOverrides assums sideConds =
   do let initSt = InitialState simctx globSt defaultAbortHandler memRepr $
                     runOverrideSim memRepr runStep
      res <- executeCrucible [] initSt
@@ -536,6 +563,10 @@ executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerO
   assumeProperty b =
     withBackend simctx $ \bak ->
       addAssumption bak (GenericAssumption dummyLoc "Property assumption" b)
+
+  assumeSideCond b =
+    withBackend simctx $ \bak ->
+      addAssumption bak (GenericAssumption dummyLoc "Side condition for partial operation" b)
 
   ppAbortedResult :: AbortedResult sym ext -> PP.Doc ann
   ppAbortedResult abortRes =
@@ -562,6 +593,10 @@ executeStep csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerO
 
        -- make any property assumptions
        liftIO (mapM_ assumeProperty assums)
+
+       -- assume side conditions related to partial operations
+       when (assumePartialSideConds opts) $ liftIO $
+         mapM_ assumeSideCond sideConds
 
        -- look up and call the step function
        () <- case Map.lookup (L.Symbol stepName) (cfgMap modTrans) of
