@@ -68,7 +68,15 @@ library copilot-verifier-examples
   exposed-modules:
     Copilot.Verifier.Examples
 
-    Copilot.Verifier.Examples.ShouldFail.UnderConstrained
+    Copilot.Verifier.Examples.ShouldFail.Partial.AbsIntMin
+    Copilot.Verifier.Examples.ShouldFail.Partial.AddSignedWrap
+    Copilot.Verifier.Examples.ShouldFail.Partial.DivByZero
+    Copilot.Verifier.Examples.ShouldFail.Partial.IndexOutOfBounds
+    Copilot.Verifier.Examples.ShouldFail.Partial.ModByZero
+    Copilot.Verifier.Examples.ShouldFail.Partial.MulSignedWrap
+    Copilot.Verifier.Examples.ShouldFail.Partial.ShiftLTooLarge
+    Copilot.Verifier.Examples.ShouldFail.Partial.ShiftRTooLarge
+    Copilot.Verifier.Examples.ShouldFail.Partial.SubSignedWrap
 
     Copilot.Verifier.Examples.ShouldPass.Array
     Copilot.Verifier.Examples.ShouldPass.Arith
@@ -78,6 +86,15 @@ library copilot-verifier-examples
     Copilot.Verifier.Examples.ShouldPass.FPOps
     Copilot.Verifier.Examples.ShouldPass.Heater
     Copilot.Verifier.Examples.ShouldPass.IntOps
+    Copilot.Verifier.Examples.ShouldPass.Partial.AbsIntMin
+    Copilot.Verifier.Examples.ShouldPass.Partial.AddSignedWrap
+    Copilot.Verifier.Examples.ShouldPass.Partial.DivByZero
+    Copilot.Verifier.Examples.ShouldPass.Partial.IndexOutOfBounds
+    Copilot.Verifier.Examples.ShouldPass.Partial.ModByZero
+    Copilot.Verifier.Examples.ShouldPass.Partial.MulSignedWrap
+    Copilot.Verifier.Examples.ShouldPass.Partial.ShiftLTooLarge
+    Copilot.Verifier.Examples.ShouldPass.Partial.ShiftRTooLarge
+    Copilot.Verifier.Examples.ShouldPass.Partial.SubSignedWrap
     Copilot.Verifier.Examples.ShouldPass.Structs
     Copilot.Verifier.Examples.ShouldPass.Voting
     Copilot.Verifier.Examples.ShouldPass.WCV
