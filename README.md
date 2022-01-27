@@ -72,7 +72,7 @@ What does it mean, then, for a generated C program in this style
 to correctly implement a given stream program? The intuition
 is basically that after `n` calls to the `step` function,
 the state of the ring-buffers of the C program should correctly
-compute the value of the corresponding stream expression 
+compute the value of the corresponding stream expression
 evaluated at index `n`, assuming the C program has been fed
 inputs corresponding to the first `n` values of the external stream
 inputs.  Moreover, the trigger functions should be called from
@@ -96,7 +96,7 @@ three things about this relation:
 2. if we assume two arbitrary program states begin in the relation
 and each takes a single transition (consuming corresponding inputs),
 the resulting states are back in the relation;
-3. that any observable 
+3. that any observable
 actions taken by one program are exactly mirrored by the other.
 
 On the high-level side of the bisimulation, the program
@@ -220,6 +220,40 @@ the trigger functions must not modify any memory under the control of
 the Copilot program, including its ring buffers and stack.  We also
 assume that the trigger functions are well defined, i.e. they are
 memory safe and do not perform any undefined behavior.
+
+#### Partial operations
+
+A generated C program may make use of partial operations. These range from
+division, which can fail if the second argument is zero, to signed integer
+arithmetic, which can overflow and result in undefined behavior. The verifier
+has two modes for dealing with partial operations:
+
+1. Any invocation of a partial operation on undefined inputs in the generated
+   C program will result in an error, provided that the user did not add an
+   assertion that assumes this behavior will not occur.
+
+2. If the generated C program invokes a partial operation on undefined inputs,
+   the verifier will check if this coincides with a corresponding invocation
+   of a partial operation in the Copilot spec. If so, the verification will
+   succeed. In other words, the verifier will check that the spec and the
+   C program are "crash-equivalent".
+
+The verifier uses mode (1) by default, but mode (2) can be enabled by using
+`Copilot.Verifier.verifyWithOptions sideCondVerifierOptions`. In this mode,
+the verifier will analyze any invocation of a operation which could be partial
+and generate a side condition that this operation will only be invoked on
+well defined inputs. During the transition step of the bisimulation proof,
+the verifier will add these side conditions as assumptions. Therefore, if
+simulating the C program generates any side conditions due to invoking partial
+operations, these side conditions from the C program should be dischargeable
+using the corresponding side conditions from the Copilot spec.
+
+Mode (2) has the caveat that `clang` may compile C code to LLVM bitcode in
+which a partial function is no longer applied to undefined inputs. For
+instance, `clang` will sometimes promote 16-bit integer values to 32 bits
+before performing arithmetic on them. This can turn an operation that would
+result in signed 16-bit integer overflow into a 32-bit integer operation
+that does _not_ overflow, for instance.
 
 ### Caveats About the Verifier
 
