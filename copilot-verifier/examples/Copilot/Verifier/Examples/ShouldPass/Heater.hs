@@ -11,7 +11,7 @@ module Copilot.Verifier.Examples.ShouldPass.Heater where
 
 import Language.Copilot
 import Copilot.Compile.C99
---import Copilot.Core.PrettyDot (prettyPrintDot)
+import Copilot.Core.PrettyPrint as PP
 --import Copilot.Language.Prelude
 
 import Copilot.Verifier ( Verbosity, VerifierOptions(..)
@@ -19,27 +19,38 @@ import Copilot.Verifier ( Verbosity, VerifierOptions(..)
 
 import Prelude ()
 
--- External temperature as a byte in degrees C
+-- External temperature as a byte, range of -50C to 100C
 temp :: Stream Word8
 temp = extern "temperature" Nothing
 
+-- Calculate temperature in Celcius.
+-- We need to cast the Word8 to a Float. Note that it is an unsafeCast, as there
+-- is no direct relation between Word8 and Float.
+ctemp :: Stream Float
+ctemp = (unsafeCast temp) * constant (150.0/255.0) - 50.0
+
 -- width of the sliding window
 window :: Int
-window = 3
+window = 5
 
--- Compute a sum of the last 3 samples
-sumTemp :: Stream Word32
-sumTemp = sum window (replicate 3 19 ++ cast temp)
+-- Compute the sliding average of the last 5 temps
+avgTemp :: Stream Float
+avgTemp = (sum window (replicate window 19.0 ++ ctemp)) / fromIntegral window
 
 spec :: Spec
 spec = do
-  trigger "heaton"  (sumTemp < (18*fromIntegral window)) [arg sumTemp]
-  trigger "heatoff" (sumTemp > (21*fromIntegral window)) [arg sumTemp]
+  trigger "heaton"  (avgTemp < 18.0) [arg avgTemp]
+  trigger "heatoff" (avgTemp > 21.0) [arg avgTemp]
 
 -- Compile the spec
 verifySpec :: Verbosity -> IO ()
-verifySpec verb = reify spec >>= verifyWithOptions defaultVerifierOptions{verbosity = verb}
-                                                   mkDefaultCSettings [] "heater"
+verifySpec verb =
+  do rspec <- reify spec
+     putStrLn (PP.prettyPrint rspec)
+     verifyWithOptions defaultVerifierOptions{verbosity = verb}
+                       mkDefaultCSettings [] "heater"
+                       rspec
+
 {-
   do spec' <- reify spec
      putStrLn $ prettyPrintDot spec'
