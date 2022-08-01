@@ -14,10 +14,11 @@ import Copilot.Compile.C99
 import Copilot.Core.PrettyPrint as PP
 --import Copilot.Language.Prelude
 
-import Copilot.Verifier ( Verbosity, VerifierOptions(..)
+import Copilot.Verifier ( Verbosity(..), VerifierOptions(..)
                         , defaultVerifierOptions, verifyWithOptions )
 
-import Prelude ()
+import qualified Prelude as P
+import Control.Monad (when)
 
 -- External temperature as a byte, range of -50C to 100C
 temp :: Stream Word8
@@ -46,7 +47,7 @@ spec = do
 verifySpec :: Verbosity -> IO ()
 verifySpec verb =
   do rspec <- reify spec
-     putStrLn (PP.prettyPrint rspec)
+     when (verb P.== Noisy) $ putStrLn (PP.prettyPrint rspec)
      verifyWithOptions defaultVerifierOptions{verbosity = verb}
                        mkDefaultCSettings [] "heater"
                        rspec
