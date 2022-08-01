@@ -76,7 +76,7 @@ import Lang.Crucible.Simulator
   ( SimContext(..), ctxSymInterface, ExecResult(..), ExecState(..)
   , defaultAbortHandler, runOverrideSim, partialValue, gpValue
   , GlobalVar, executeCrucible, OverrideSim, regValue
-  , readGlobal, writeGlobal, callCFG, emptyRegMap, RegEntry(..)
+  , readGlobal, modifyGlobal, callCFG, emptyRegMap, RegEntry(..)
   , AbortedResult(..)
   )
 import Lang.Crucible.Simulator.ExecutionTree ( withBackend )
@@ -84,7 +84,7 @@ import Lang.Crucible.Simulator.GlobalState ( insertGlobal )
 import Lang.Crucible.Simulator.RegValue (RegValue, RegValue'(..))
 import Lang.Crucible.Simulator.SimError (SimError(..), SimErrorReason(..)) -- ppSimError
 import Lang.Crucible.Types
-  ( TypeRepr(..), (:~:)(..), KnownRepr(..), BoolType )
+  ( TypeRepr(..), (:~:)(..), KnownRepr(..), NatType )
 
 import Lang.Crucible.LLVM (llvmGlobals, registerModuleFn, register_llvm_overrides)
 import Lang.Crucible.LLVM.Bytes (bitsToBytes)
@@ -137,7 +137,8 @@ import What4.Interface
   ( Pred, bvLit, bvAdd, bvUrem, bvMul, bvIsNonzero, bvEq, isEq
   , getConfiguration, freshBoundedBV, predToBV
   , getCurrentProgramLoc, printSymExpr
-  , truePred, falsePred, eqPred, andPred, backendPred
+  , truePred, falsePred, andPred, backendPred
+  , natAdd, natEq, natIte, natLit
   )
 import What4.Expr.Builder
   ( FloatModeRepr(..), ExprBuilder, BoolExpr, startCaching
@@ -414,8 +415,9 @@ verifyStepBisimulation opts cruxOpts adapters csettings bbMapRef simctx llvmMod 
 
         -- set up trigger guard global variables
         let halloc = simHandleAllocator simctx
+        -- See Note [Global variables for trigger functions]
         let prepTrigger (nm, guard, _) =
-              do gv <- freshGlobalVar halloc (Text.pack (nm ++ "_called")) BoolRepr
+              do gv <- freshGlobalVar halloc (Text.pack (nm ++ "_called")) NatRepr
                  return (nm, gv, guard)
         triggerGlobals <- mapM prepTrigger (CW4.triggerState prfbundle)
 
@@ -458,7 +460,7 @@ triggerOverride :: forall sym t arch.
   HasPtrWidth (ArchWidth arch) =>
   HasLLVMAnn sym =>
 
-  (Name, GlobalVar BoolType, Pred sym) ->
+  (Name, GlobalVar NatType, Pred sym) ->
   (Name, BoolExpr t, [(Some Type, CW4.XExpr sym)]) ->
   OverrideTemplate (Crux sym) sym arch (RegEntry sym Mem) EmptyCtx Mem
 triggerOverride (_,triggerGlobal,_) (nm, _guard, args) =
@@ -469,7 +471,12 @@ triggerOverride (_,triggerGlobal,_) (nm, _guard, args) =
       LLVMOverride decl argCtx UnitRepr $
         \memOps bak calledArgs ->
           do let sym = backendGetSym bak
-             writeGlobal triggerGlobal (truePred sym)
+             modifyGlobal triggerGlobal $ \count -> do
+               -- See Note [Global variables for trigger functions]
+               countPlusOne <- liftIO $ do
+                 one <- natLit sym 1
+                 natAdd sym count one
+               pure ((), countPlusOne)
              mem <- readGlobal memOps
              liftIO $ checkArgs bak mem (toListFC Some calledArgs) args
              return ()
@@ -534,13 +541,14 @@ executeStep :: forall sym arch.
   MemImpl sym ->
   L.Module ->
   ModuleTranslation arch ->
-  [(Name, GlobalVar BoolType, Pred sym)] ->
+  [(Name, GlobalVar NatType, Pred sym)] ->
   [OverrideTemplate (Crux sym) sym arch (RegEntry sym Mem) EmptyCtx Mem] ->
   [Pred sym] {- User-provided property assumptions -} ->
   [Pred sym] {- Side conditions related to partial operations -} ->
   IO (MemImpl sym)
 executeStep opts csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerOverrides assums sideConds =
-  do let initSt = InitialState simctx globSt defaultAbortHandler memRepr $
+  do globSt <- foldM setupTrigger (llvmGlobals memVar mem) triggerGlobals
+     let initSt = InitialState simctx globSt defaultAbortHandler memRepr $
                     runOverrideSim memRepr runStep
      res <- executeCrucible [] initSt
      case res of
@@ -549,8 +557,10 @@ executeStep opts csettings simctx memVar mem llvmmod modTrans triggerGlobals tri
        TimeoutResult{} -> fail "simulation timed out!"
 
  where
-  setupTrigger gs (_,gv,_) = insertGlobal gv (falsePred sym) gs
-  globSt = foldl setupTrigger (llvmGlobals memVar mem) triggerGlobals
+  -- See Note [Global variables for trigger functions]
+  setupTrigger gs (_,gv,_) = do
+    zero <- liftIO $ natLit sym 0
+    pure $ insertGlobal gv zero gs
   llvm_ctx = modTrans ^. transContext
   stepName = cSettingsStepFunctionName csettings
   sym = simctx^.ctxSymInterface
@@ -606,10 +616,16 @@ executeStep opts csettings simctx memVar mem llvmmod modTrans triggerGlobals tri
              _ -> fail $ unwords [show stepName, "should take no arguments and return void"]
          Nothing -> fail $ unwords ["Could not find step function named", show stepName]
 
-       -- Assert that the trigger functions were called iff the associated guard condition was true
+       -- Assert that the trigger functions were called exactly once iff the
+       -- associated guard condition was true.
+       -- See Note [Global variables for trigger functions].
        forM_ triggerGlobals $ \(nm, gv, guard) ->
-         do guard' <- readGlobal gv
-            eq <- liftIO $ eqPred sym guard guard'
+         do expectedCount <- liftIO $ do
+              one  <- natLit sym 1
+              zero <- natLit sym 0
+              natIte sym guard one zero
+            actualCount <- readGlobal gv
+            eq <- liftIO $ natEq sym expectedCount actualCount
             let shortmsg = "Trigger guard equality condition: " ++ show nm
             let longmsg  = show (printSymExpr eq)
             let rsn      = AssertFailureSimError shortmsg longmsg
@@ -1065,6 +1081,21 @@ arguments to a function. This impedance mismatch is handled in two places:
 There is a very similar story for structs. Copilot passes structs by reference
 in trigger functions (e.g., `void trigger(struct s *ss)`), so we must also load
 from a `PtrRepr` in `computeEqualVals` to handle structs.
+
+See Note [Global variables for trigger functions]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+As part of verifying that the behavior of a Copilot specification's trigger
+functions behave the same way as the trigger functions in the corresponding C
+program, we check that each trigger function in the C program is invoked the
+appropriate number of times. That is, if the guard condition for a trigger is
+true, the C trigger function should be invoked exactly once, and if the guard
+condition is false, then the trigger function should not be invoked at all.
+
+To check this, we create a Nat-valued global variable for each trigger function
+and initialize it to zero. Whenever we simulate a trigger function, we increment
+the value of the corresponding global variable. At the end of simulation, we
+check that the value in each global variable is equal to
+`if guard_cond then 1 else 0`.
 -}
 
 
