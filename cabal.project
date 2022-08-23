@@ -10,6 +10,7 @@ packages:
   deps/copilot/copilot/
   deps/copilot/copilot-core/
   deps/copilot/copilot-c99/
+  deps/copilot/copilot-interpreter/
   deps/copilot/copilot-language/
   deps/copilot/copilot-libraries/
   deps/copilot/copilot-theorem/
