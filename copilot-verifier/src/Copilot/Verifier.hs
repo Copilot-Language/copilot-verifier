@@ -31,6 +31,7 @@ import qualified Data.Text as Text
 import qualified Data.Map.Strict as Map
 import Data.IORef (newIORef, modifyIORef, IORef)
 import qualified Text.LLVM.AST as L
+import qualified Text.LLVM.PP as L
 import Data.List (genericLength)
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NE
@@ -86,7 +87,7 @@ import Lang.Crucible.Simulator.SimError (SimError(..), SimErrorReason(..)) -- pp
 import Lang.Crucible.Types
   ( TypeRepr(..), (:~:)(..), KnownRepr(..), NatType )
 
-import Lang.Crucible.LLVM (llvmGlobals, registerModuleFn, register_llvm_overrides)
+import Lang.Crucible.LLVM (llvmGlobals, registerLazyModule, register_llvm_overrides)
 import Lang.Crucible.LLVM.Bytes (bitsToBytes)
 import Lang.Crucible.LLVM.DataLayout (DataLayout)
 import Lang.Crucible.LLVM.Extension (LLVM, ArchWidth)
@@ -109,7 +110,8 @@ import Lang.Crucible.LLVM.MemModel
   , memRepr, Mem
   )
 import Lang.Crucible.LLVM.Translation
-  ( ModuleTranslation(..), translateModule, globalInitMap
+  ( LLVMTranslationWarning(..), ModuleTranslation
+  , getTranslatedCFG, translateModule, globalInitMap
   , transContext, llvmPtrWidth, llvmTypeCtx, llvmTypeAsRepr
   )
 import Lang.Crucible.LLVM.TypeContext (TypeContext, llvmDataLayout)
@@ -269,6 +271,7 @@ data CopilotVerifierData t = CopilotVerifierData
 verifyBitcode ::
   Log.Logs msgs =>
   Log.SupportsCruxLogMessage msgs =>
+  Log.SupportsCruxLLVMLogMessage msgs =>
   Log.SupportsCopilotLogMessage msgs =>
   VerifierOptions {- ^ Verifier-specific settings -} ->
   CSettings   {- ^ Settings used to compile the Copilot spec. Used to find the names of functions and variables. -} ->
@@ -301,7 +304,7 @@ verifyBitcode opts csettings properties spec cruxOpts llvmOpts bcFile =
 
      -- Load and translate the input LLVM module
      llvmMod <- parseLLVM bcFile
-     (Some trans, _warns) <-
+     Some trans <-
         let ?transOpts = transOpts llvmOpts
          in translateModule halloc memVar llvmMod
 
@@ -324,7 +327,7 @@ verifyBitcode opts csettings properties spec cruxOpts llvmOpts bcFile =
 
           -- Compute the LLVM memory state with global variables initialized
           -- to their initial values.
-          initialMem <- populateAllGlobals bak (globalInitMap trans) emptyMem
+          initialMem <- populateAllGlobals bak (trans ^. globalInitMap) emptyMem
 
           -- Use the Copilot spec directly to compute the symbolic states
           -- necessary to carry out the states of the bisimulation proof.
@@ -379,6 +382,7 @@ verifyStepBisimulation ::
   IsSymInterface sym =>
   Log.Logs msgs =>
   Log.SupportsCruxLogMessage msgs =>
+  Log.SupportsCruxLLVMLogMessage msgs =>
   Log.SupportsCopilotLogMessage msgs =>
   sym ~ ExprBuilder t st fs =>
   HasPtrWidth wptr =>
@@ -525,8 +529,10 @@ triggerOverride (_,triggerGlobal,_) (nm, _guard, args) =
 --   This function will record side-conditions that arise from the semantics
 --   of C itself (e.g., memory is accessed in bounds and signed arithmetic
 --   doesn't overflow) as well as the conditions related to trigger functions.
-executeStep :: forall sym arch.
+executeStep :: forall sym arch msgs.
   IsSymInterface sym =>
+  Log.Logs msgs =>
+  Log.SupportsCruxLLVMLogMessage msgs =>
   (?memOpts :: MemOptions) =>
   (?lc :: TypeContext) =>
   (?intrinsicsOpts :: IntrinsicsOptions) =>
@@ -599,7 +605,7 @@ executeStep opts csettings simctx memVar mem llvmmod modTrans triggerGlobals tri
     do -- set up built-in functions and trigger overrides
        register_llvm_overrides llvmmod [] triggerOverrides llvm_ctx
        -- set up functions defined in the module
-       mapM_ (registerModuleFn llvm_ctx) (Map.elems (cfgMap modTrans))
+       registerLazyModule sayTranslationWarning modTrans
 
        -- make any property assumptions
        liftIO (mapM_ assumeProperty assums)
@@ -609,8 +615,10 @@ executeStep opts csettings simctx memVar mem llvmmod modTrans triggerGlobals tri
          mapM_ assumeSideCond sideConds
 
        -- look up and call the step function
-       () <- case Map.lookup (L.Symbol stepName) (cfgMap modTrans) of
-         Just (_, AnyCFG anyCfg) ->
+       mbCfg <- liftIO $ getTranslatedCFG modTrans (L.Symbol stepName)
+       () <- case mbCfg of
+         Just (_, AnyCFG anyCfg, warns) -> do
+           liftIO $ mapM_ sayTranslationWarning warns
            case (cfgArgTypes anyCfg, cfgReturnType anyCfg) of
              (Empty, UnitRepr) -> regValue <$> callCFG anyCfg emptyRegMap
              _ -> fail $ unwords [show stepName, "should take no arguments and return void"]
@@ -1185,3 +1193,12 @@ withCopilotLogging computation = do
       ?injectCruxLLVMLogMessage = LoggingCruxLLVM
       ?injectCopilotLogMessage = LoggingCopilot
     in computation
+
+sayTranslationWarning ::
+  Log.Logs msgs =>
+  Log.SupportsCruxLLVMLogMessage msgs =>
+  LLVMTranslationWarning -> IO ()
+sayTranslationWarning = Log.sayCruxLLVM . f
+  where
+    f (LLVMTranslationWarning s p msg) =
+        Log.TranslationWarning (Text.pack (show (L.ppSymbol s))) (Text.pack (show p)) msg
