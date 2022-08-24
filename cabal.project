@@ -14,7 +14,6 @@ packages:
   deps/copilot/copilot-language/
   deps/copilot/copilot-libraries/
   deps/copilot/copilot-theorem/
-  deps/language-c99-util
 
 optional-packages:
   deps/crucible/crux/
