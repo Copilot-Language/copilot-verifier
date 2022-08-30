@@ -35,8 +35,10 @@ window :: Int
 window = 5
 
 -- Compute the sliding average of the last 5 temps
+-- (Here, 19.5 is the average of 18.0 and 21.0, the two temperature extremes
+-- that we check for in the spec.)
 avgTemp :: Stream Float
-avgTemp = (sum window (replicate window 19.0 ++ ctemp)) / fromIntegral window
+avgTemp = (sum window (replicate window 19.5 ++ ctemp)) / fromIntegral window
 
 spec :: Spec
 spec = do
