@@ -28,7 +28,7 @@ temp = extern "temperature" Nothing
 -- We need to cast the Word8 to a Float. Note that it is an unsafeCast, as there
 -- is no direct relation between Word8 and Float.
 ctemp :: Stream Float
-ctemp = (unsafeCast temp) * constant (150.0/255.0) - 50.0
+ctemp = (unsafeCast temp * constant (150.0/255.0)) - constant 50.0
 
 -- width of the sliding window
 window :: Int
