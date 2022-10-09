@@ -1,0 +1,42 @@
+Cabal-version: 2.2
+Name:          copilot-verifier-demo
+Version:       0.0
+Author:        Galois Inc.
+Maintainer:    rscott@galois.com
+Copyright:     (c) Galois, Inc 2022
+License:       BSD-3-Clause
+License-file:  LICENSE
+Build-type:    Simple
+Category:      Language
+Synopsis:      Demo programs for copilot-verifier
+Description:
+
+common bldflags
+  ghc-options: -Wall
+               -Werror=incomplete-patterns
+               -Werror=missing-methods
+               -Werror=overlapping-patterns
+               -Wpartial-fields
+               -Wincomplete-uni-patterns
+  ghc-prof-options: -O2 -fprof-auto-top
+  default-language: Haskell2010
+  default-extensions:
+     NondecreasingIndentation
+  build-depends:
+    base,
+    copilot,
+    copilot-c99,
+    copilot-core,
+    copilot-libraries,
+    copilot-language,
+    copilot-theorem,
+    copilot-verifier
+
+library
+  import: bldflags
+
+  hs-source-dirs: src
+  exposed-modules:
+    Demo1
+    Demo2
+    Demo3
