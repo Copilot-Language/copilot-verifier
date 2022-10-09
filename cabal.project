@@ -6,6 +6,7 @@
 
 packages:
   copilot-verifier/
+  copilot-verifier-demo/
 
   deps/copilot/copilot/
   deps/copilot/copilot-core/
