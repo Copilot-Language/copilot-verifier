@@ -341,7 +341,7 @@ verifyBitcode opts csettings properties spec cruxOpts llvmOpts bcFile =
 
           -- Now, the real meat. Carry out the bisimulation step of the proof.
           verifyStepBisimulation opts cruxOpts adapters csettings
-             bbMapRef simctx llvmMod trans memVar emptyMem proofStateBundle
+             bbMapRef simctx llvmMod trans memVar initialMem proofStateBundle
 
 
 -- | Prove that the state of the global variables at program startup
