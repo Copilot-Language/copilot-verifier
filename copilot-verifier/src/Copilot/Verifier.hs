@@ -1004,10 +1004,10 @@ copilotTypeToLLVMType = loop
       let len = fromIntegral (tylength t0) in
       L.Array len (copilotTypeToLLVMTypeBool8 tp)
     loop (CT.Struct v) =
-      L.Struct (map val (CT.toValues v))
-
-    val :: forall t. CT.Value t -> L.Type
-    val (CT.Value tp _) = copilotTypeToLLVMTypeBool8 tp
+      -- NB: Don't use L.Struct here. That represents a literal, unnamed
+      -- struct, but all of the structs used in a copilot-c99 program are
+      -- named structs. As such, we must identify the struct by its alias.
+      L.Alias (copilotStructIdent v)
 
 -- | Like 'copilotTypeToLLVMType', except that 'CT.Bool's are assumed to be
 -- eight bits, not one bit. See @Note [How LLVM represents bool]@.
@@ -1018,8 +1018,8 @@ copilotTypeToLLVMTypeBool8 CT.Bool = L.PrimType (L.Integer 8)
 copilotTypeToLLVMTypeBool8 tp = copilotTypeToLLVMType tp
 
 -- | Like 'copilotTypeToLLVMType', except that composite types (i.e.,
--- 'CT.Array's and 'CT.Struct's) are converted to 'L.PtrTo' instead of direct
--- 'L.Array's or 'L.Struct's. See @Note [Arrays and structs]@.
+-- 'CT.Array's and 'CT.Struct's) are given special treatment involving
+-- pointers. See @Note [Arrays and structs]@.
 copilotTypeToLLVMTypeCompositePtr ::
   CT.Type a ->
   L.Type
