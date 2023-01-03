@@ -21,6 +21,7 @@ import qualified Copilot.Verifier.Examples.ShouldFail.Partial.ShiftLTooLarge   a
 import qualified Copilot.Verifier.Examples.ShouldFail.Partial.ShiftRTooLarge   as Fail.ShiftRTooLarge
 import qualified Copilot.Verifier.Examples.ShouldFail.Partial.SubSignedWrap    as Fail.SubSignedWrap
 import qualified Copilot.Verifier.Examples.ShouldPass.Array                    as Array
+import qualified Copilot.Verifier.Examples.ShouldPass.ArrayOfStructs           as ArrayOfStructs
 import qualified Copilot.Verifier.Examples.ShouldPass.Arith                    as Arith
 import qualified Copilot.Verifier.Examples.ShouldPass.Clock                    as Clock
 import qualified Copilot.Verifier.Examples.ShouldPass.Counter                  as Counter
@@ -58,6 +59,7 @@ shouldFailExamples verb = Map.fromList
 shouldPassExamples :: Verbosity -> Map (CI Text) (IO ())
 shouldPassExamples verb = Map.fromList
     [ example "Array" (Array.verifySpec verb)
+    , example "ArrayOfStructs" (ArrayOfStructs.verifySpec verb)
     , example "Arith" (Arith.verifySpec verb)
     , example "Clock" (Clock.verifySpec verb)
     , example "Counter" (Counter.verifySpec verb)
