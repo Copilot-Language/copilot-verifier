@@ -11,7 +11,7 @@ module Copilot.Verifier.Examples.ShouldPass.Heater where
 
 import Language.Copilot
 import Copilot.Compile.C99
-import Copilot.Core.PrettyPrint as PP
+import Copilot.PrettyPrint as PP
 --import Copilot.Language.Prelude
 
 import Copilot.Verifier ( Verbosity(..), VerifierOptions(..)
