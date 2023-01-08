@@ -13,6 +13,7 @@ packages:
   deps/copilot/copilot-interpreter/
   deps/copilot/copilot-language/
   deps/copilot/copilot-libraries/
+  deps/copilot/copilot-prettyprinter/
   deps/copilot/copilot-theorem/
 
 optional-packages:
