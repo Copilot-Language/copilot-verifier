@@ -1,0 +1,83 @@
+name: copilot-verifier
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  SOLVER_PKG_VERSION: "snapshot-20221212"
+  # The CACHE_VERSION can be updated to force the use of a new cache if
+  # the current cache contents become corrupted/invalid.  This can
+  # sometimes happen when (for example) the OS version is changed but
+  # older .so files are cached, which can have various effects
+  # (e.g. cabal complains it can't find a valid version of the "happy"
+  # tool).
+  CACHE_VERSION: 1
+  LLVM_VERSION: 12
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04]
+        ghc-version: ["8.10.7", "9.0.2", "9.2.7"]
+        cabal: [ '3.8.1.0' ]
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+
+      - uses: haskell/actions/setup@v1
+        id: setup-haskell
+        with:
+          ghc-version: ${{ matrix.ghc-version }}
+          cabal-version: ${{ matrix.cabal }}
+
+      - uses: actions/cache/restore@v3
+        name: Restore cabal store cache
+        with:
+          path: |
+            ${{ steps.setup-haskell.outputs.cabal-store }}
+            dist-newstyle
+          key: ${{ env.CACHE_VERSION }}-cabal-${{ matrix.os }}-${{ matrix.ghc-version }}-${{ hashFiles(format('cabal.GHC-{0}.config', matrix.ghc-version)) }}-${{ github.sha }}
+          restore-keys: |
+            ${{ env.CACHE_VERSION }}-cabal-${{ matrix.os }}-${{ matrix.ghc-version }}-${{ hashFiles(format('cabal.GHC-{0}.config', matrix.ghc-version)) }}-
+
+      - shell: bash
+        name: Install system dependencies
+        run: .github/ci.sh install_system_deps
+        env:
+          BIN_ZIP_FILE: ${{ matrix.os }}-bin.zip
+          BUILD_TARGET_OS: ${{ matrix.os }}
+
+      - shell: bash
+        name: Update
+        run: cabal update
+
+      - shell: bash
+        name: Configure
+        run: cabal configure --enable-tests -j2 all
+
+      - shell: bash
+        name: Build copilot-verifier
+        run: cabal build pkg:copilot-verifier
+
+      - shell: bash
+        name: Build copilot-verifier-demo
+        run: cabal build pkg:copilot-verifier-demo
+
+      - shell: bash
+        name: Test copilot-verifier
+        run: cabal test pkg:copilot-verifier
+
+      - uses: actions/cache/save@v3
+        name: Save cabal store cache
+        if: always()
+        with:
+          path: |
+            ${{ steps.setup-haskell.outputs.cabal-store }}
+            dist-newstyle
+          key: ${{ env.CACHE_VERSION }}-cabal-${{ matrix.os }}-${{ matrix.ghc-version }}-${{ hashFiles(format('cabal.GHC-{0}.config', matrix.ghc-version)) }}-${{ github.sha }}
