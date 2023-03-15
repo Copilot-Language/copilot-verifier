@@ -40,7 +40,7 @@ import qualified Data.BitVector.Sized as BV
 import GHC.Generics (Generic)
 import qualified Prettyprinter as PP
 import System.Exit (exitFailure)
-import System.FilePath ((</>))
+import System.FilePath ((</>), (<.>))
 
 import Copilot.Compile.C99 (CSettings(..), compileWith)
 import Copilot.Core
@@ -177,6 +177,23 @@ data VerifierOptions = VerifierOptions
     --   to partial operations in the Copilot specification. As a result, any
     --   use of a partial operation in the generated C code will cause
     --   verification to fail unless the user adds their own assumptions.
+  , logSmtInteractions :: Bool
+    -- ^ If 'True', create log files corresponding to the SMT solver
+    -- interactions used to discharge each proof goal. The file will be named
+    -- @<step>-<goal number>-<solver>.smt2@, where:
+    --
+    -- * @<step>@ will be either @initial-step@ or @transition-step@, depending
+    --   on which step of the proof the goal corresponds to.
+    --
+    -- * @<goal number>@ will be the number of the goal, starting at 0 and
+    --   counting up. Note that each step of the proof has its own goal
+    --   numbers. This means that there can be both an
+    --   @initial-step-0-<solver>.smt2@ and a @transition-step-0-<solver>.smt2@,
+    --   and similarly for other numbers.
+    --
+    -- * @<solver>@ is the name of the SMT solver used to discharge the proof
+    --   goal. Currently, this will always be @z3@, although we might make this
+    --   configurable in the future.
   } deriving stock Show
 
 -- | The default 'VerifierOptions':
@@ -184,10 +201,13 @@ data VerifierOptions = VerifierOptions
 -- * Produce diagnostics as verification proceeds ('Noisy').
 --
 -- * Do not assume any side conditions related to partial operations.
+--
+-- * Do not log any SMT solver interactions.
 defaultVerifierOptions :: VerifierOptions
 defaultVerifierOptions = VerifierOptions
   { verbosity = Noisy
   , assumePartialSideConds = False
+  , logSmtInteractions = False
   }
 
 -- | Like 'defaultVerifierOptions', except that the verifier will assume side
@@ -336,13 +356,25 @@ verifyBitcode opts csettings properties spec cruxOpts llvmOpts bcFile =
 
           -- First check that the initial state of the program matches the starting
           -- segment of the associated Copilot streams.
-          verifyInitialState cruxOpts adapters bbMapRef simctx initialMem
+          let cruxOptsInit = setCruxOfflineSolverOutput "initial-step" cruxOpts
+          verifyInitialState cruxOptsInit adapters bbMapRef simctx initialMem
              (CW4.initialStreamState proofStateBundle)
 
           -- Now, the real meat. Carry out the bisimulation step of the proof.
-          verifyStepBisimulation opts cruxOpts adapters csettings
+          let cruxOptsTrans = setCruxOfflineSolverOutput "transition-step" cruxOpts
+          verifyStepBisimulation opts cruxOptsTrans adapters csettings
              bbMapRef simctx llvmMod trans memVar initialMem proofStateBundle
-
+  where
+    -- If @logSmtInteractions@ is enabled, enable offline solver output in the
+    -- supplied 'CruxOptions' with the supplied file template. Otherwise, return
+    -- the supplied 'CruxOptions' unaltered.
+    setCruxOfflineSolverOutput :: FilePath -> CruxOptions -> CruxOptions
+    setCruxOfflineSolverOutput template cruxOpts'
+      | logSmtInteractions opts
+      = cruxOpts'
+          { offlineSolverOutput = Just $ outDir cruxOpts' </> template <.> "smt2" }
+      | otherwise
+      = cruxOpts'
 
 -- | Prove that the state of the global variables at program startup
 --   matches the expected initial segments of the associated Copilot
