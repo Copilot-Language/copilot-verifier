@@ -44,7 +44,7 @@ verifySpec :: Verbosity -> IO ()
 verifySpec verb =
   do s <- reify multRingSpec
      r <- prove Z3 s
-     when (verb P.== Noisy) $
+     when (verb P.>= Default) $
        print r
      verifyWithOptions defaultVerifierOptions{verbosity = verb}
                        mkDefaultCSettings ["reduced"] "multRingSpec" s

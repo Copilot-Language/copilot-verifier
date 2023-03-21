@@ -80,7 +80,7 @@ verifySpec verb = do
   results <- prove Z3 spec'
 
   -- Print the results.
-  when (verb P.== Noisy) $
+  when (verb P.>= Default) $
     forM_ results $ \(nm, res) -> do
       putStr $ nm <> ": "
       case res of

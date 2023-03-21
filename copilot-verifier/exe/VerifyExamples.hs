@@ -39,7 +39,7 @@ verifyExamples :: Options -> IO ()
 verifyExamples Options{examples} = do
   -- Check that all requested examples exist
   examplesWithMain <- for examples $ \example ->
-    case Map.lookup example (shouldFailExamples Noisy `Map.union` shouldPassExamples Noisy) of
+    case Map.lookup example (shouldFailExamples Default `Map.union` shouldPassExamples Default) of
       Just m  -> pure (example, m)
       Nothing -> fail $ "No example named " ++ Text.unpack (CI.original example)
 
