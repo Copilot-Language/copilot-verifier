@@ -2,6 +2,7 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Copilot.Verifier.Log
@@ -19,17 +20,28 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics (Generic)
 
-data CopilotLogMessage
-  = GeneratedCFile FilePath -- The path of the generated C File
-  | CompiledBitcodeFile String -- The prefix to use in the compiled bitcode's directory
-                        FilePath -- The name of the generated LLVM bitcode file
-  | TranslatedToCrucible
-  | GeneratingProofState
-  | ComputingConditions VerificationStep
-  | ProvingConditions VerificationStep
-  | AllGoalsProved
-  | OnlySomeGoalsProved Integer -- Number of goals proved
-                        Integer -- Number of total goals
+data CopilotLogMessage where
+  GeneratedCFile ::
+       FilePath
+       -- ^ The path of the generated C File
+    -> CopilotLogMessage
+  CompiledBitcodeFile ::
+       String
+       -- ^ The prefix to use in the compiled bitcode's directory
+    -> FilePath
+       -- ^ The name of the generated LLVM bitcode file
+    -> CopilotLogMessage
+  TranslatedToCrucible :: CopilotLogMessage
+  GeneratingProofState :: CopilotLogMessage
+  ComputingConditions :: VerificationStep -> CopilotLogMessage
+  ProvingConditions :: VerificationStep -> CopilotLogMessage
+  AllGoalsProved :: CopilotLogMessage
+  OnlySomeGoalsProved ::
+       Integer
+       -- ^ Number of goals proved
+    -> Integer
+       -- ^ Number of total goals
+    -> CopilotLogMessage
   deriving stock Generic
   deriving anyclass ToJSON
 
