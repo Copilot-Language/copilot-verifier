@@ -198,14 +198,15 @@ data VerifierOptions = VerifierOptions
 
 -- | The default 'VerifierOptions':
 --
--- * Produce diagnostics as verification proceeds ('Noisy').
+-- * Produce a reasonable amount of diagnostics as verification proceeds
+--   ('Default').
 --
 -- * Do not assume any side conditions related to partial operations.
 --
 -- * Do not log any SMT solver interactions.
 defaultVerifierOptions :: VerifierOptions
 defaultVerifierOptions = VerifierOptions
-  { verbosity = Noisy
+  { verbosity = Default
   , assumePartialSideConds = False
   , logSmtInteractions = False
   }
@@ -218,10 +219,14 @@ sideCondVerifierOptions = defaultVerifierOptions
   }
 
 -- | How much output should verification produce?
+--
+-- The data constructors are listed in increasing order of how many diagnostics
+-- they produce.
 data Verbosity
-  = Noisy -- ^ Produce diagnostics as verification proceeds.
-  | Quiet -- ^ Don't produce any diagnostics.
-  deriving stock (Eq, Show)
+  = Quiet   -- ^ Don't produce any diagnostics.
+  | Default -- ^ Produce a reasonable amount of diagnostics as verification proceeds.
+  | Noisy   -- ^ Produce as many diagnostics as possible.
+  deriving stock (Eq, Ord, Show)
 
 -- | Like 'verify', but with 'VerifierOptions' to more finely control the
 -- verifier's behavior.

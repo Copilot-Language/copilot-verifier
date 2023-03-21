@@ -49,7 +49,7 @@ spec = do
 verifySpec :: Verbosity -> IO ()
 verifySpec verb =
   do rspec <- reify spec
-     when (verb P.== Noisy) $ putStrLn (PP.prettyPrint rspec)
+     when (verb P.>= Default) $ putStrLn (PP.prettyPrint rspec)
      verifyWithOptions defaultVerifierOptions{verbosity = verb}
                        mkDefaultCSettings [] "heater"
                        rspec

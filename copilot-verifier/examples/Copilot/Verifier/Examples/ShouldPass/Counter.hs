@@ -50,7 +50,7 @@ verifySpec :: Verbosity -> IO ()
 verifySpec verb =
   do s <- reify spec
      r <- prove Z3 s
-     when (verb P.== Noisy) $
+     when (verb P.>= Default) $
        print r
      verifyWithOptions defaultVerifierOptions{verbosity = verb}
                        mkDefaultCSettings ["range", "range2"] "counter" s
