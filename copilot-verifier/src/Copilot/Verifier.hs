@@ -27,9 +27,11 @@ import Control.Monad (foldM, forM_, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State (execStateT, lift, StateT(..))
 import Data.Aeson (ToJSON)
+import Data.Foldable (traverse_)
+import Data.Functor (void)
 import qualified Data.Text as Text
 import qualified Data.Map.Strict as Map
-import Data.IORef (newIORef, modifyIORef, IORef)
+import Data.IORef (newIORef, modifyIORef', readIORef, IORef)
 import qualified Text.LLVM.AST as L
 import qualified Text.LLVM.PP as L
 import Data.List (genericLength)
@@ -64,9 +66,10 @@ import Lang.Crucible.Backend
   ( IsSymInterface, Goals(..), Assumptions, Assertion
   , pushAssumptionFrame, popUntilAssumptionFrame
   , getProofObligations, clearProofObligations
-  , LabeledPred(..), addDurableProofObligation
-  , addAssumption, CrucibleAssumption(..), ppAbortExecReason
+  , LabeledPred(..), abortExecBecause, AbortExecReason(..), addAssumption
+  , addDurableProofObligation, assert, CrucibleAssumption(..), ppAbortExecReason
   , IsSymBackend(..), HasSymInterface(..)
+  , labeledPred, labeledPredMsg
   -- , ProofObligations, proofGoal, goalsToList, labeledPredMsg
   )
 import Lang.Crucible.Backend.Simple (newSimpleBackend)
@@ -89,7 +92,8 @@ import Lang.Crucible.Types
 
 import Lang.Crucible.LLVM (llvmGlobals, registerLazyModule, register_llvm_overrides)
 import Lang.Crucible.LLVM.Bytes (bitsToBytes)
-import Lang.Crucible.LLVM.DataLayout (DataLayout)
+import Lang.Crucible.LLVM.DataLayout (Alignment, DataLayout)
+import Lang.Crucible.LLVM.Errors (BadBehavior)
 import Lang.Crucible.LLVM.Extension (LLVM, ArchWidth)
 import Lang.Crucible.LLVM.Globals (initializeAllMemory, populateAllGlobals)
 import Lang.Crucible.LLVM.Intrinsics
@@ -102,13 +106,15 @@ import Lang.Crucible.LLVM.MemType
   , mkStructInfo
   )
 import Lang.Crucible.LLVM.MemModel
-  ( mkMemVar, withPtrWidth, HasLLVMAnn, MemImpl, LLVMAnnMap
-  , HasPtrWidth, doResolveGlobal, doLoad, doStore
-  , MemOptions, StorageType, bitvectorType
+  ( mkMemVar, withPtrWidth, HasLLVMAnn, LLVMAnnMap, MemImpl
+  , HasPtrWidth, doResolveGlobal, doStore
+  , LLVMPtr, LLVMVal, MemOptions, PartLLVMVal(..), StorageType, bitvectorType
   , ptrAdd, toStorableType, projectLLVM_bv
-  , pattern LLVMPointerRepr, pattern PtrRepr, llvmPointer_bv
-  , memRepr, Mem
+  , pattern LLVMPointerRepr, pattern PtrRepr, loadRaw, llvmPointer_bv
+  , memRepr, Mem, unpackMemValue
   )
+import Lang.Crucible.LLVM.MemModel.CallStack (CallStack)
+import Lang.Crucible.LLVM.MemModel.Partial (BoolAnn(..))
 import Lang.Crucible.LLVM.Translation
   ( LLVMTranslationWarning(..), ModuleTranslation
   , getTranslatedCFG, translateModule, globalInitMap
@@ -139,18 +145,19 @@ import What4.Interface
   ( Pred, bvLit, bvAdd, bvUrem, bvMul, bvIsNonzero, bvEq, isEq
   , getConfiguration, freshBoundedBV, predToBV
   , getCurrentProgramLoc, printSymExpr
-  , truePred, falsePred, andPred, backendPred
-  , natAdd, natEq, natIte, natLit
+  , truePred, falsePred, andPred, annotateTerm, backendPred
+  , getAnnotation, natAdd, natEq, natIte, natLit
   )
 import What4.Expr.Builder
   ( FloatModeRepr(..), ExprBuilder, BoolExpr, startCaching
   , newExprBuilder
   )
+import What4.FunctionName (functionName)
 import What4.InterpretedFloatingPoint
   ( FloatInfoRepr(..), IsInterpretedFloatExprBuilder(..)
   , SingleFloat, DoubleFloat
   )
-import What4.ProgramLoc (ProgramLoc, mkProgramLoc, Position(..))
+import What4.ProgramLoc (ProgramLoc, mkProgramLoc, plFunction, Position(..))
 import What4.Solver.Adapter (SolverAdapter(..))
 import What4.Solver.Z3 (z3Adapter)
 import What4.Symbol (safeSymbol)
@@ -275,9 +282,13 @@ computeConfiguration opts csettings0 prefix =
      let csettings = csettings0{ cSettingsOutputDirectory = odir }
      let csrc = odir </> prefix ++ ".c"
      let cruxOpts1 = cruxOpts0{ outDir = odir, bldDir = odir, inputFiles = [csrc]
-                              , outputOptions = (outputOptions cruxOpts0)
-                                                  { quietMode = quiet
-                                                  }
+                              , outputOptions =
+                                  (outputOptions cruxOpts0)
+                                    { quietMode = quiet
+                                    , simVerbose = if verbosity opts > Default
+                                                   then 2
+                                                   else 0
+                                    }
                               }
      let ?outputConfig = ocfg2 (Just (outputOptions cruxOpts1))
      cruxOpts2 <- postprocessOptions cruxOpts1
@@ -315,8 +326,8 @@ verifyBitcode opts csettings properties spec cruxOpts llvmOpts bcFile =
      startCaching sym
 
      -- capture LLVM side-condition information for use in error reporting
-     bbMapRef <- newIORef mempty
-     let ?recordLLVMAnnotation = \stk an bb -> modifyIORef bbMapRef (Map.insert an (stk,bb))
+     clRefs <- newCopilotLogRefs
+     let ?recordLLVMAnnotation = recordLLVMAnnotation clRefs
 
      -- Set up the solver to use for verification.  Right now we hard-code this to Z3.
      let adapters = [z3Adapter] -- TODO? configurable
@@ -362,13 +373,13 @@ verifyBitcode opts csettings properties spec cruxOpts llvmOpts bcFile =
           -- First check that the initial state of the program matches the starting
           -- segment of the associated Copilot streams.
           let cruxOptsInit = setCruxOfflineSolverOutput "initial-step" cruxOpts
-          verifyInitialState cruxOptsInit adapters bbMapRef simctx initialMem
+          verifyInitialState cruxOptsInit adapters clRefs simctx initialMem
              (CW4.initialStreamState proofStateBundle)
 
           -- Now, the real meat. Carry out the bisimulation step of the proof.
           let cruxOptsTrans = setCruxOfflineSolverOutput "transition-step" cruxOpts
           verifyStepBisimulation opts cruxOptsTrans adapters csettings
-             bbMapRef simctx llvmMod trans memVar initialMem proofStateBundle
+             clRefs simctx llvmMod trans memVar initialMem proofStateBundle
   where
     -- If @logSmtInteractions@ is enabled, enable offline solver output in the
     -- supplied 'CruxOptions' with the supplied file template. Otherwise, return
@@ -380,6 +391,17 @@ verifyBitcode opts csettings properties spec cruxOpts llvmOpts bcFile =
           { offlineSolverOutput = Just $ outDir cruxOpts' </> template <.> "smt2" }
       | otherwise
       = cruxOpts'
+
+-- | Capture LLVM side-condition information for use in error reporting.
+recordLLVMAnnotation ::
+  IsSymInterface sym =>
+  CopilotLogRefs sym ->
+  CallStack ->
+  BoolAnn sym ->
+  BadBehavior sym ->
+  IO ()
+recordLLVMAnnotation clRefs stk bann bb =
+  modifyIORef' (llvmAnnMapRef clRefs) (Map.insert bann (stk, bb))
 
 -- | Prove that the state of the global variables at program startup
 --   matches the expected initial segments of the associated Copilot
@@ -397,22 +419,22 @@ verifyInitialState ::
 
   CruxOptions ->
   [SolverAdapter st] ->
-  IORef (LLVMAnnMap sym) ->
+  CopilotLogRefs sym ->
   SimCtxt Crux sym LLVM ->
   MemImpl sym ->
   CW4.BisimulationProofState sym ->
   IO ()
-verifyInitialState cruxOpts adapters bbMapRef simctx mem initialState =
+verifyInitialState cruxOpts adapters clRefs simctx mem initialState =
   withBackend simctx $ \bak ->
   do Log.sayCopilot $ Log.ComputingConditions Log.InitialState
      frm <- pushAssumptionFrame bak
 
-     assertStateRelation bak mem initialState
+     assertStateRelation bak clRefs mem initialState
 
      popUntilAssumptionFrame bak frm
 
      Log.sayCopilot $ Log.ProvingConditions Log.InitialState
-     proveObls cruxOpts adapters bbMapRef simctx
+     proveObls cruxOpts adapters clRefs Log.InitialState simctx
 
 
 verifyStepBisimulation ::
@@ -434,7 +456,7 @@ verifyStepBisimulation ::
   CruxOptions ->
   [SolverAdapter st] ->
   CSettings ->
-  IORef (LLVMAnnMap sym) ->
+  CopilotLogRefs sym ->
   SimCtxt Crux sym LLVM ->
   L.Module ->
   ModuleTranslation arch ->
@@ -442,7 +464,7 @@ verifyStepBisimulation ::
   MemImpl sym ->
   CW4.BisimulationProofBundle sym ->
   IO ()
-verifyStepBisimulation opts cruxOpts adapters csettings bbMapRef simctx llvmMod modTrans memVar mem prfbundle =
+verifyStepBisimulation opts cruxOpts adapters csettings clRefs simctx llvmMod modTrans memVar mem prfbundle =
   withBackend simctx $ \bak ->
   do Log.sayCopilot $ Log.ComputingConditions Log.StepBisimulation
 
@@ -452,7 +474,7 @@ verifyStepBisimulation opts cruxOpts adapters csettings bbMapRef simctx llvmMod 
         mem' <- setupPrestate bak mem prfbundle
 
         -- sanity check, verify that we set up the memory in the expected relation
-        assertStateRelation bak mem' (CW4.preStreamState prfbundle)
+        assertStateRelation bak clRefs mem' (CW4.preStreamState prfbundle)
 
         -- set up trigger guard global variables
         let halloc = simHandleAllocator simctx
@@ -463,16 +485,16 @@ verifyStepBisimulation opts cruxOpts adapters csettings bbMapRef simctx llvmMod 
         triggerGlobals <- mapM prepTrigger (CW4.triggerState prfbundle)
 
         -- execute the step function
-        let overrides = zipWith triggerOverride triggerGlobals (CW4.triggerState prfbundle)
-        mem'' <- executeStep opts csettings simctx memVar mem' llvmMod modTrans triggerGlobals overrides (CW4.assumptions prfbundle) (CW4.sideConds prfbundle)
+        let overrides = zipWith (triggerOverride clRefs) triggerGlobals (CW4.triggerState prfbundle)
+        mem'' <- executeStep opts csettings clRefs simctx memVar mem' llvmMod modTrans triggerGlobals overrides (CW4.assumptions prfbundle) (CW4.sideConds prfbundle)
 
         -- assert the poststate is in the relation
-        assertStateRelation bak mem'' (CW4.postStreamState prfbundle)
+        assertStateRelation bak clRefs mem'' (CW4.postStreamState prfbundle)
 
      popUntilAssumptionFrame bak frm
 
      Log.sayCopilot $ Log.ProvingConditions Log.StepBisimulation
-     proveObls cruxOpts adapters bbMapRef simctx
+     proveObls cruxOpts adapters clRefs Log.StepBisimulation simctx
 
 
 -- | Set up the "trigger override" functions.  These dummy functions
@@ -492,8 +514,10 @@ verifyStepBisimulation opts cruxOpts adapters csettings bbMapRef simctx llvmMod 
 --   Otherwise, the override functions have no effects, which corresponds
 --   to the assumption that the external environment makes no changes to the
 --   program state that are observable to the Copilot monitor.
-triggerOverride :: forall sym t arch.
+triggerOverride :: forall sym t arch msgs.
   IsSymInterface sym =>
+  Log.Logs msgs =>
+  Log.SupportsCopilotLogMessage msgs =>
   (?memOpts :: MemOptions) =>
   (?lc :: TypeContext) =>
   (?intrinsicsOpts :: IntrinsicsOptions) =>
@@ -501,10 +525,11 @@ triggerOverride :: forall sym t arch.
   HasPtrWidth (ArchWidth arch) =>
   HasLLVMAnn sym =>
 
+  CopilotLogRefs sym ->
   (Name, GlobalVar NatType, Pred sym) ->
   (Name, BoolExpr t, [(Some Type, CW4.XExpr sym)]) ->
   OverrideTemplate (Crux sym) sym arch (RegEntry sym Mem) EmptyCtx Mem
-triggerOverride (_,triggerGlobal,_) (nm, _guard, args) =
+triggerOverride clRefs (_,triggerGlobal,_) (nm, _guard, args) =
    let args' = map toTypeRepr args in
    case Ctx.fromList args' of
      Some argCtx ->
@@ -551,12 +576,18 @@ triggerOverride (_,triggerGlobal,_) (nm, _guard, args) =
     bak -> MemImpl sym -> Integer -> Some (RegEntry sym) -> Some Type -> CW4.XExpr sym -> IO ()
   checkArg bak mem i (Some (RegEntry tp v)) (Some ctp) x =
     do let sym = backendGetSym bak
-       eq <- computeEqualVals bak mem ctp x tp v
+       eq <- computeEqualVals bak clRefs mem ctp x tp v
+       (ann, eq') <- annotateTerm sym eq
        let shortmsg = "Trigger " ++ show nm ++ " argument " ++ show i
-       let longmsg  = show (printSymExpr eq)
+       let longmsg  = show (printSymExpr eq')
        let rsn      = AssertFailureSimError shortmsg longmsg
        loc <- getCurrentProgramLoc sym
-       addDurableProofObligation bak (LabeledPred eq (SimError loc rsn))
+       modifyIORef' (verifierAssertionMapRef clRefs)
+         $ Map.insert (BoolAnn ann)
+         $ Log.TriggerArgumentEqualityAssertion
+         $ Log.SomeSome
+         $ Log.TriggerArgumentEquality sym loc nm i ctp x tp v
+       addDurableProofObligation bak (LabeledPred eq' (SimError loc rsn))
 
 
 -- | Actually execute the Crucible simulator on the generated "step" function.
@@ -570,6 +601,7 @@ executeStep :: forall sym arch msgs.
   IsSymInterface sym =>
   Log.Logs msgs =>
   Log.SupportsCruxLLVMLogMessage msgs =>
+  Log.SupportsCopilotLogMessage msgs =>
   (?memOpts :: MemOptions) =>
   (?lc :: TypeContext) =>
   (?intrinsicsOpts :: IntrinsicsOptions) =>
@@ -579,6 +611,7 @@ executeStep :: forall sym arch msgs.
 
   VerifierOptions ->
   CSettings ->
+  CopilotLogRefs sym ->
   SimCtxt Crux sym LLVM ->
   GlobalVar Mem ->
   MemImpl sym ->
@@ -589,7 +622,7 @@ executeStep :: forall sym arch msgs.
   [Pred sym] {- User-provided property assumptions -} ->
   [Pred sym] {- Side conditions related to partial operations -} ->
   IO (MemImpl sym)
-executeStep opts csettings simctx memVar mem llvmmod modTrans triggerGlobals triggerOverrides assums sideConds =
+executeStep opts csettings clRefs simctx memVar mem llvmmod modTrans triggerGlobals triggerOverrides assums sideConds =
   do globSt <- foldM setupTrigger (llvmGlobals memVar mem) triggerGlobals
      let initSt = InitialState simctx globSt defaultAbortHandler memRepr $
                     runOverrideSim memRepr runStep
@@ -671,11 +704,17 @@ executeStep opts csettings simctx memVar mem llvmmod modTrans triggerGlobals tri
               natIte sym guard one zero
             actualCount <- readGlobal gv
             eq <- liftIO $ natEq sym expectedCount actualCount
+            (ann, eq') <- liftIO $ annotateTerm sym eq
             let shortmsg = "Trigger guard equality condition: " ++ show nm
-            let longmsg  = show (printSymExpr eq)
+            let longmsg  = show (printSymExpr eq')
             let rsn      = AssertFailureSimError shortmsg longmsg
+            liftIO
+              $ modifyIORef' (verifierAssertionMapRef clRefs)
+              $ Map.insert (BoolAnn ann)
+              $ Log.TriggersInvokedCorrespondinglyAssertion
+              $ Log.TriggersInvokedCorrespondingly dummyLoc nm expectedCount actualCount
             withBackend simctx $ \bak ->
-              liftIO $ addDurableProofObligation bak (LabeledPred eq (SimError dummyLoc rsn))
+              liftIO $ addDurableProofObligation bak (LabeledPred eq' (SimError dummyLoc rsn))
 
        -- return the final state of the memory
        readGlobal memVar
@@ -768,16 +807,18 @@ setupPrestate bak mem0 prfbundle =
 --   relation.
 assertStateRelation ::
   IsSymBackend sym bak =>
+  Log.Logs msgs =>
   HasPtrWidth wptr =>
   HasLLVMAnn sym =>
   (?memOpts :: MemOptions) =>
   (?lc :: TypeContext) =>
 
   bak ->
+  CopilotLogRefs sym ->
   MemImpl sym ->
   CW4.BisimulationProofState sym ->
   IO ()
-assertStateRelation bak mem prfst =
+assertStateRelation bak clRefs mem prfst =
   -- For each stream in the proof state, assert that the
   -- generated ring buffer global contains the corresponding
   -- values.
@@ -808,8 +849,14 @@ assertStateRelation bak mem prfst =
 
         -- read the value of the ring buffer index
         let sizeTAlign = memTypeAlign (llvmDataLayout ?lc) (IntType (natValue ?ptrWidth))
-        idxVal <- projectLLVM_bv bak =<<
-          doLoad bak mem idxPtr sizeTStorage (LLVMPointerRepr ?ptrWidth) sizeTAlign
+        (bannIdxVal, pIdxVal, idxVal) <-
+          doLoadWithAnn bak mem idxPtr sizeTStorage (LLVMPointerRepr ?ptrWidth) sizeTAlign
+        idxVal' <- projectLLVM_bv bak idxVal
+        locIdxVal <- getCurrentProgramLoc sym
+        modifyIORef' (verifierAssertionMapRef clRefs)
+          $ Map.insert bannIdxVal
+          $ Log.RingBufferIndexLoadAssertion
+          $ Log.RingBufferIndexLoad sym locIdxVal (Text.pack idxName) pIdxVal
 
         buflen'  <- bvLit sym ?ptrWidth (BV.mkBV ?ptrWidth buflen)
         typeLen' <- bvLit sym ?ptrWidth (BV.mkBV ?ptrWidth (toInteger typeLen))
@@ -818,18 +865,31 @@ assertStateRelation bak mem prfst =
         -- memory and assert that they are equal.
         forM_ (zip vs [0 ..]) $ \(v,i) ->
           do ptrVal <-
-               do x1 <- bvAdd sym idxVal =<< bvLit sym ?ptrWidth (BV.mkBV ?ptrWidth i)
+               do x1 <- bvAdd sym idxVal' =<< bvLit sym ?ptrWidth (BV.mkBV ?ptrWidth i)
                   x2 <- bvUrem sym x1 buflen'
                   x3 <- bvMul sym x2 typeLen'
                   ptrAdd sym ?ptrWidth bufPtr x3
 
-             v' <- doLoad bak mem ptrVal stType typeRepr typeAlign
-             eq <- computeEqualVals bak mem ctp v typeRepr v'
+             (bannv', pv', v') <- doLoadWithAnn bak mem ptrVal stType typeRepr typeAlign
+             locv' <- getCurrentProgramLoc sym
+             let bufNameT = Text.pack bufName
+             modifyIORef' (verifierAssertionMapRef clRefs)
+               $ Map.insert bannv'
+               $ Log.RingBufferLoadAssertion
+               $ Log.SomeSome
+               $ Log.RingBufferLoad sym locv' bufNameT i buflen ctp typeRepr pv'
+             eq <- computeEqualVals bak clRefs mem ctp v typeRepr v'
+             (ann, eq') <- annotateTerm sym eq
              let shortmsg = "State equality condition: " ++ show nm ++ " index value " ++ show i
-             let longmsg  = show (printSymExpr eq)
+             let longmsg  = show (printSymExpr eq')
              let rsn      = AssertFailureSimError shortmsg longmsg
              let loc      = mkProgramLoc "<>" InternalPos
-             addDurableProofObligation bak (LabeledPred eq (SimError loc rsn))
+             modifyIORef' (verifierAssertionMapRef clRefs)
+               $ Map.insert (BoolAnn ann)
+               $ Log.StreamValueEqualityAssertion
+               $ Log.SomeSome
+               $ Log.StreamValueEquality sym loc bufNameT i buflen ctp v typeRepr v'
+             addDurableProofObligation bak (LabeledPred eq' (SimError loc rsn))
 
         return ()
 
@@ -894,13 +954,14 @@ computeEqualVals :: forall sym bak tp a wptr.
   (?lc :: TypeContext) =>
   (?memOpts :: MemOptions) =>
   bak ->
+  CopilotLogRefs sym ->
   MemImpl sym ->
   Type a ->
   CW4.XExpr sym ->
   TypeRepr tp ->
   RegValue sym tp ->
   IO (Pred sym)
-computeEqualVals bak mem = loop
+computeEqualVals bak clRefs mem = loop
   where
     sym = backendGetSym bak
 
@@ -961,7 +1022,13 @@ computeEqualVals bak mem = loop
              typeAlign = memTypeAlign (llvmDataLayout ?lc) memTy
          stp <- toStorableType memTy
          llvmTypeAsRepr memTy $ \tpr ->
-           do regVal <- doLoad bak mem v stp tpr typeAlign
+           do loc <- getCurrentProgramLoc sym
+              (bann, p, regVal) <- doLoadWithAnn bak mem v stp tpr typeAlign
+              modifyIORef' (verifierAssertionMapRef clRefs)
+                $ Map.insert bann
+                $ Log.PointerArgumentLoadAssertion
+                $ Log.SomeSome
+                $ Log.PointerArgumentLoad sym loc ctp tpr p
               loop ctp x tpr regVal
 
     loop _ctp x tpr _v =
@@ -1143,6 +1210,48 @@ check that the value in each global variable is equal to
 `if guard_cond then 1 else 0`.
 -}
 
+-- | Like @crucible-llvm@'s @doLoad@, but also returning the 'BoolAnn' and
+-- 'Pred' asserting the validity of the load.
+doLoadWithAnn ::
+  ( IsSymBackend sym bak, HasPtrWidth wptr, HasLLVMAnn sym
+  , ?memOpts :: MemOptions ) =>
+  bak ->
+  MemImpl sym ->
+  LLVMPtr sym wptr {- ^ pointer to load from      -} ->
+  StorageType      {- ^ type of value to load     -} ->
+  TypeRepr tp      {- ^ crucible type of the result -} ->
+  Alignment        {- ^ assumed pointer alignment -} ->
+  IO (BoolAnn sym, Pred sym, RegValue sym tp)
+doLoadWithAnn bak mem ptr valType tpr alignment = do
+    partLLVMVal <- loadRaw sym mem ptr valType alignment
+    (bann, p, llvmVal) <- assertSafeWithAnn bak partLLVMVal
+    regVal <- unpackMemValue sym tpr llvmVal
+    pure (bann, p, regVal)
+  where
+    sym = backendGetSym bak
+
+-- | Like @crucible-llvm@'s @assertSafe@, but also returning the 'BoolAnn' and
+-- 'Pred' corresponding the assertion.
+assertSafeWithAnn ::
+  IsSymBackend sym bak =>
+  bak ->
+  PartLLVMVal sym ->
+  IO (BoolAnn sym, Pred sym, LLVMVal sym)
+assertSafeWithAnn bak partVal =
+  case partVal of
+    NoErr p v -> do
+      (ann, p') <- annotateTerm sym p
+      assert bak p' rsn
+      return (BoolAnn ann, p', v)
+    Err p -> do
+      loc <- getCurrentProgramLoc sym
+      let err = SimError loc rsn
+      (_ann, p') <- annotateTerm sym p
+      addProofObligation bak (LabeledPred p' err)
+      abortExecBecause (AssertionFailure err)
+  where
+    rsn = AssertFailureSimError "Error during memory load" ""
+    sym = backendGetSym bak
 
 -- | Given a simulator state, extract any collected proof obligations,
 --   attempt to prove them, and present the results to the user.
@@ -1157,10 +1266,11 @@ proveObls ::
   Log.SupportsCopilotLogMessage msgs =>
   CruxOptions ->
   [SolverAdapter st] ->
-  IORef (LLVMAnnMap sym) ->
+  CopilotLogRefs sym ->
+  Log.VerificationStep ->
   SimCtxt Crux sym LLVM ->
   IO ()
-proveObls cruxOpts adapters bbMapRef simctx =
+proveObls cruxOpts adapters clRefs step simctx =
   withBackend simctx $ \bak ->
   do let sym = backendGetSym bak
      obls <- getProofObligations bak
@@ -1168,8 +1278,11 @@ proveObls cruxOpts adapters bbMapRef simctx =
 
 --     mapM_ (print . ppSimError) (summarizeObls sym obls)
 
-     results <- proveGoalsOffline adapters cruxOpts simctx (explainFailure sym bbMapRef) obls
-     presentResults sym results
+     vaMap <- readIORef $ verifierAssertionMapRef clRefs
+     let laMapRef = llvmAnnMapRef clRefs
+     laMap <- readIORef laMapRef
+     results <- proveGoalsOffline adapters cruxOpts simctx (explainFailure sym laMapRef) obls
+     presentResults sym vaMap laMap step results
 
 {-
 summarizeObls :: sym -> ProofObligations sym -> [SimError]
@@ -1182,15 +1295,19 @@ presentResults ::
   Log.SupportsCopilotLogMessage msgs =>
   IsSymInterface sym =>
   sym ->
+  Map.Map (BoolAnn sym) (Log.VerifierAssertion sym) ->
+  LLVMAnnMap sym ->
+  Log.VerificationStep ->
   (ProcessedGoals, Maybe (Goals (Assumptions sym) (Assertion sym, [ProgramLoc], ProofResult sym))) ->
   IO ()
-presentResults sym (num, goals)
+presentResults sym vaMap laMap step (num, goals)
   | numTotalGoals == 0
   = Log.sayCopilot Log.AllGoalsProved
 
     -- All goals were proven
   | numProvedGoals == numTotalGoals
-  = printGoals
+  = do traverse_ (logVerifierAssertions sym vaMap laMap step num) goals
+       printGoals
 
     -- There were some unproved goals, so fail with exit code 1
   | otherwise
@@ -1206,6 +1323,155 @@ presentResults sym (num, goals)
          case goals' of
            Just g -> Log.logGoal g
            Nothing -> return ()
+
+-- | Upon a successful verification, log the various assertions that the
+-- verifier makes. These assertions will be visible in the output if the
+-- 'verbosity' is set to 'Noisy'.
+logVerifierAssertions ::
+  forall sym msgs.
+  IsSymInterface sym =>
+  Log.Logs msgs =>
+  Log.SupportsCopilotLogMessage msgs =>
+  sym ->
+  Map.Map (BoolAnn sym) (Log.VerifierAssertion sym) ->
+  LLVMAnnMap sym ->
+  Log.VerificationStep ->
+  ProcessedGoals ->
+  Goals (Assumptions sym) (Assertion sym, [ProgramLoc], ProofResult sym) ->
+  IO ()
+logVerifierAssertions sym vaMap laMap step num goals = void $ go 0 goals
+  where
+    numTotalGoals = totalProcessedGoals num
+
+    go :: Integer ->
+          Goals (Assumptions sym) (Assertion sym, [ProgramLoc], ProofResult sym) ->
+          IO Integer
+    go goalIdx gs =
+      case gs of
+        Assuming _ gs' ->
+          go goalIdx gs'
+
+        Prove (gl, locs, _) -> do
+          let p = gl^.labeledPred
+              nearestLoc = nearestProgramLoc locs
+
+          -- First, obtain the verifier assertion.
+          va <- case getAnnotation sym p of
+            -- If the assertion has a BoolAnn, look it up in the assertion maps
+            -- that we have accumulated during verification.
+            Just ann
+              |  Just va <- Map.lookup (BoolAnn ann) vaMap
+              -> pure va
+              |  Just (stk, bb) <- Map.lookup (BoolAnn ann) laMap
+              -> pure $ Log.LLVMBadBehaviorCheckAssertion
+                      $ Log.LLVMBadBehaviorCheck sym nearestLoc stk bb p
+              |  otherwise
+              -> fail $ unlines
+                   [ "Cannot find BoolAnn for assertion"
+                   , show $ gl^.labeledPredMsg
+                   , show $ printSymExpr p
+                   ]
+            -- If the assertion does not have a BoolAnn, fall back to using
+            -- heuristics to guess what kind of assertion it is.
+            Nothing -> pure $ verifierAssertionHeuristics sym nearestLoc p
+
+          -- Log the assertion.
+          case va of
+            Log.StreamValueEqualityAssertion (Log.SomeSome a) ->
+              Log.sayCopilot $
+              Log.StreamValueEqualityProofGoal step goalIdx numTotalGoals a
+            Log.TriggersInvokedCorrespondinglyAssertion a ->
+              Log.sayCopilot $
+              Log.TriggersInvokedCorrespondinglyProofGoal step goalIdx numTotalGoals a
+            Log.TriggerArgumentEqualityAssertion (Log.SomeSome a) ->
+              Log.sayCopilot $
+              Log.TriggerArgumentEqualityProofGoal step goalIdx numTotalGoals a
+            Log.RingBufferLoadAssertion (Log.SomeSome a) ->
+              Log.sayCopilot $
+              Log.RingBufferLoadProofGoal step goalIdx numTotalGoals a
+            Log.RingBufferIndexLoadAssertion a ->
+              Log.sayCopilot $
+              Log.RingBufferIndexLoadProofGoal step goalIdx numTotalGoals a
+            Log.PointerArgumentLoadAssertion (Log.SomeSome a) ->
+              Log.sayCopilot $
+              Log.PointerArgumentLoadProofGoal step goalIdx numTotalGoals a
+            Log.AccessorFunctionLoadAssertion a ->
+              Log.sayCopilot $
+              Log.AccessorFunctionLoadProofGoal step goalIdx numTotalGoals a
+            Log.GuardFunctionLoadAssertion a ->
+              Log.sayCopilot $
+              Log.GuardFunctionLoadProofGoal step goalIdx numTotalGoals a
+            Log.UnknownFunctionLoadAssertion a ->
+              Log.sayCopilot $
+              Log.UnknownFunctionLoadProofGoal step goalIdx numTotalGoals a
+            Log.LLVMBadBehaviorCheckAssertion a ->
+              Log.sayCopilot $
+              Log.LLVMBadBehaviorCheckProofGoal step goalIdx numTotalGoals a
+
+          -- Finally, return the current goal index.
+          pure goalIdx
+
+        ProveConj gs1 gs2 -> do
+          goalIdx' <- go goalIdx gs1
+          go (goalIdx' + 1) gs2
+
+-- | If a verifier assertion does not have a corresponding 'BoolAnn', then we
+-- must use heuristics to guess what kind of assertion it is. These heuristics
+-- are not perfect, and we fall back to 'Log.UnknownFunctionLoad' in the event
+-- that we cannot figure out a more obvious cause for the assertion.
+verifierAssertionHeuristics ::
+  IsSymInterface sym =>
+  sym ->
+  ProgramLoc ->
+  Pred sym ->
+  Log.VerifierAssertion sym
+verifierAssertionHeuristics sym loc p
+  | "_get" `Text.isSuffixOf` functionName funName
+  = Log.AccessorFunctionLoadAssertion $
+    Log.AccessorFunctionLoad sym loc funName p
+
+  | "_guard" `Text.isSuffixOf` functionName funName
+  = Log.GuardFunctionLoadAssertion $
+    Log.GuardFunctionLoad sym loc funName p
+
+  | otherwise
+  = Log.UnknownFunctionLoadAssertion $
+    Log.UnknownFunctionLoad sym loc funName p
+  where
+    funName = plFunction loc
+
+-- | Pick the most recent 'ProgramLoc' in a trace of locations. If there are
+-- no locations available, return a dummy location.
+nearestProgramLoc :: [ProgramLoc] -> ProgramLoc
+nearestProgramLoc locs =
+  case locs of
+    loc:_ -> loc
+    _     -> mkProgramLoc "<>" InternalPos
+
+-- | A collection of 'IORef's used to accumulate log messages that the verifier
+-- may display at the end of verification.
+data CopilotLogRefs sym = CopilotLogRefs
+  { verifierAssertionMapRef :: !(IORef (Map.Map (BoolAnn sym) (Log.VerifierAssertion sym)))
+    -- ^ A map of 'BoolAnn's (i.e., unique numbers) to 'Log.VerifierAssertions'.
+  , llvmAnnMapRef :: !(IORef (LLVMAnnMap sym))
+    -- ^ A map of 'BoolAnn's (i.e., unique numbers) to assertions about checks
+    -- for bad behavior in LLVM.
+
+    -- This is kept in a separate 'IORef' for technical reasons, as
+    -- @crucible-llvm@'s 'explainFailure' function expects this 'IORef' as an
+    -- argument. We could put everything into 'verifierAssertionMapRef', but
+    -- that would require some tiresome 'IORef' massaging to make work.
+  }
+
+-- | Create a new 'CopilotLogRefs' value.
+newCopilotLogRefs :: IsSymInterface sym => IO (CopilotLogRefs sym)
+newCopilotLogRefs = do
+  vaMapRef <- newIORef mempty
+  laMapRef <- newIORef mempty
+  pure $ CopilotLogRefs
+    { verifierAssertionMapRef = vaMapRef
+    , llvmAnnMapRef = laMapRef
+    }
 
 data CopilotLogging
   = LoggingCrux Log.CruxLogMessage
