@@ -7,3 +7,9 @@
 packages:
   copilot-verifier/
   copilot-verifier-demo/
+
+source-repository-package
+  type: git
+  location: https://github.com/GaloisInc/copilot-1
+  tag: da7dcfd27fe9cc7b13238e1015dd5c92889f8c01
+  subdir: copilot copilot-core copilot-c99 copilot-interpreter copilot-language copilot-libraries copilot-prettyprinter copilot-theorem

@@ -152,7 +152,7 @@ import What4.Expr.Builder
   ( FloatModeRepr(..), ExprBuilder, BoolExpr, startCaching
   , newExprBuilder
   )
-import What4.FunctionName (functionName)
+import What4.FunctionName (functionName, functionNameFromText)
 import What4.InterpretedFloatingPoint
   ( FloatInfoRepr(..), IsInterpretedFloatExprBuilder(..)
   , SingleFloat, DoubleFloat
@@ -161,6 +161,8 @@ import What4.ProgramLoc (ProgramLoc, mkProgramLoc, plFunction, Position(..))
 import What4.Solver.Adapter (SolverAdapter(..))
 import What4.Solver.Z3 (z3Adapter)
 import What4.Symbol (safeSymbol)
+import qualified GHC.Stack as GHCS
+import qualified What4.ProgramLoc as WPL
 
 -- | @'verify' csettings props prefix spec@ verifies the Copilot specification
 -- @spec@ under the assumptions @props@ matches the behavior of the C program
@@ -489,9 +491,9 @@ verifyStepBisimulation opts cruxOpts adapters csettings clRefs simctx llvmMod mo
         -- set up trigger guard global variables
         let halloc = simHandleAllocator simctx
         -- See Note [Global variables for trigger functions]
-        let prepTrigger (nm, guard, _) =
+        let prepTrigger (nm, guard, _, callStack) =
               do gv <- freshGlobalVar halloc (Text.pack (nm ++ "_called")) NatRepr
-                 return (nm, gv, guard)
+                 return (nm, gv, guard, callStack)
         triggerGlobals <- mapM prepTrigger (CW4.triggerState prfbundle)
 
         -- execute the step function
@@ -536,10 +538,10 @@ triggerOverride :: forall sym t arch msgs.
   HasLLVMAnn sym =>
 
   CopilotLogRefs sym ->
-  (Name, GlobalVar NatType, Pred sym) ->
-  (Name, BoolExpr t, [(Some Type, CW4.XExpr sym)]) ->
+  (Name, GlobalVar NatType, Pred sym, GHCS.CallStack) ->
+  (Name, BoolExpr t, [(Some Type, CW4.XExpr sym)], GHCS.CallStack) ->
   OverrideTemplate (Crux sym) sym arch (RegEntry sym Mem) EmptyCtx Mem
-triggerOverride clRefs (_,triggerGlobal,_) (nm, _guard, args) =
+triggerOverride clRefs (_,triggerGlobal,_,_) (nm, _guard, args, _) =
    let args' = map toTypeRepr args in
    case Ctx.fromList args' of
      Some argCtx ->
@@ -627,7 +629,7 @@ executeStep :: forall sym arch msgs.
   MemImpl sym ->
   L.Module ->
   ModuleTranslation arch ->
-  [(Name, GlobalVar NatType, Pred sym)] ->
+  [(Name, GlobalVar NatType, Pred sym, GHCS.CallStack)] ->
   [OverrideTemplate (Crux sym) sym arch (RegEntry sym Mem) EmptyCtx Mem] ->
   [Pred sym] {- User-provided property assumptions -} ->
   [Pred sym] {- Side conditions related to partial operations -} ->
@@ -644,7 +646,7 @@ executeStep opts csettings clRefs simctx memVar mem llvmmod modTrans triggerGlob
 
  where
   -- See Note [Global variables for trigger functions]
-  setupTrigger gs (_,gv,_) = do
+  setupTrigger gs (_,gv,_,_) = do
     zero <- liftIO $ natLit sym 0
     pure $ insertGlobal gv zero gs
   llvm_ctx = modTrans ^. transContext
@@ -655,6 +657,16 @@ executeStep opts csettings clRefs simctx memVar mem llvmmod modTrans triggerGlob
   -- so we can correspond assumptions and asserts back to the parts of the original spec that
   -- gave rise to them.
   dummyLoc = mkProgramLoc "<>" InternalPos
+
+  -- Get the earliest call from a callstack and convert it to a ProgramLoc.
+  getProgramLoc :: GHCS.CallStack -> WPL.ProgramLoc
+  getProgramLoc callStack =
+    let callSites = GHCS.getCallStack callStack
+        (funcName, GHCS.SrcLoc {
+          GHCS.srcLocStartLine=lineNo,
+          GHCS.srcLocStartCol=colNo,
+          GHCS.srcLocFile=srcLoc}) = last callSites in
+    WPL.mkProgramLoc (functionNameFromText $ Text.pack funcName) (WPL.sourcePos srcLoc lineNo colNo)
 
   assumeProperty b =
     withBackend simctx $ \bak ->
@@ -707,7 +719,7 @@ executeStep opts csettings clRefs simctx memVar mem llvmmod modTrans triggerGlob
        -- Assert that the trigger functions were called exactly once iff the
        -- associated guard condition was true.
        -- See Note [Global variables for trigger functions].
-       forM_ triggerGlobals $ \(nm, gv, guard) ->
+       forM_ triggerGlobals $ \(nm, gv, guard, callStack) ->
          do expectedCount <- liftIO $ do
               one  <- natLit sym 1
               zero <- natLit sym 0
@@ -718,11 +730,12 @@ executeStep opts csettings clRefs simctx memVar mem llvmmod modTrans triggerGlob
             let shortmsg = "Trigger guard equality condition: " ++ show nm
             let longmsg  = show (printSymExpr eq')
             let rsn      = AssertFailureSimError shortmsg longmsg
+            let triggerLoc = getProgramLoc callStack
             liftIO
               $ modifyIORef' (verifierAssertionMapRef clRefs)
               $ Map.insert (BoolAnn ann)
               $ Log.TriggersInvokedCorrespondinglyAssertion
-              $ Log.TriggersInvokedCorrespondingly dummyLoc nm expectedCount actualCount
+              $ Log.TriggersInvokedCorrespondingly triggerLoc nm expectedCount actualCount
             withBackend simctx $ \bak ->
               liftIO $ addDurableProofObligation bak (LabeledPred eq' (SimError dummyLoc rsn))
 
