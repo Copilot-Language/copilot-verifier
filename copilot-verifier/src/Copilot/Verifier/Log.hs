@@ -676,9 +676,9 @@ showsCopilotType prec tp =
     CT.Double   -> showString "Double"
     CT.Array t  -> showParen (prec >= 11) $
                      showString "Array" .
-                     showsPrec 11 (CT.tysize tp) .
+                     showsPrec 11 (CT.typeSize tp) .
                      showsCopilotType 11 t
-    CT.Struct x -> showString $ CT.typename x
+    CT.Struct x -> showString $ CT.typeName x
 
 ppCopilotValue :: WI.IsSymExprBuilder sym => CW4.XExpr sym -> PP.Doc a
 ppCopilotValue val =

@@ -1055,7 +1055,7 @@ copilotTypeToMemType dl = loop
     loop CT.Float  = FloatType
     loop CT.Double = DoubleType
     loop t0@(CT.Array tp) =
-      let len = fromIntegral (tylength t0) in
+      let len = fromIntegral (typeLength t0) in
       ArrayType len (copilotTypeToMemTypeBool8 dl tp)
     loop (CT.Struct v) =
       StructType (mkStructInfo dl False (map val (CT.toValues v)))
@@ -1105,7 +1105,7 @@ copilotTypeToLLVMType = loop
     loop CT.Float  = L.PrimType (L.FloatType L.Float)
     loop CT.Double = L.PrimType (L.FloatType L.Double)
     loop t0@(CT.Array tp) =
-      let len = fromIntegral (tylength t0) in
+      let len = fromIntegral (typeLength t0) in
       L.Array len (copilotTypeToLLVMTypeBool8 tp)
     loop (CT.Struct v) =
       -- NB: Don't use L.Struct here. That represents a literal, unnamed
@@ -1135,7 +1135,7 @@ copilotTypeToLLVMTypeCompositePtr tp = copilotTypeToLLVMType tp
 
 -- | Given a struct @s@, construct the name @struct.s@ as an LLVM identifier.
 copilotStructIdent :: Struct a => a -> L.Ident
-copilotStructIdent struct = L.Ident $ "struct." ++ typename struct
+copilotStructIdent struct = L.Ident $ "struct." ++ typeName struct
 
 {-
 Note [How LLVM represents bool]
