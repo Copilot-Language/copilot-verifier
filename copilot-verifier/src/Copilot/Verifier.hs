@@ -293,8 +293,18 @@ computeConfiguration opts csettings0 prefix =
      let ?outputConfig = ocfg2 (Just (outputOptions cruxOpts1))
      cruxOpts2 <- postprocessOptions cruxOpts1
 
-     -- NB, we are fixing the optimization level to -O0 here
-     (cruxOpts3, llvmOpts2) <- processLLVMOptions (cruxOpts2, llvmOpts0{ optLevel = 0 })
+     -- Tweak the options passed to Clang:
+     --
+     -- - Fix the optimization level to -O0.
+     --
+     -- - Pass -ffp-contract=off to prevent sequences of floating-point
+     --   multiplications/additions from being optimized to llvm.fmuladd
+     --   intrinsics, which makes floating-point verification fragile.
+     let llvmOpts1 = llvmOpts0
+                       { optLevel = 0
+                       , clangOpts = "-ffp-contract=off" : clangOpts llvmOpts0
+                       }
+     (cruxOpts3, llvmOpts2) <- processLLVMOptions (cruxOpts2, llvmOpts1)
 
      let ocfg3 = ocfg2 (Just (outputOptions cruxOpts3))
      return (ocfg3, cruxOpts3, llvmOpts2, csettings, csrc)
