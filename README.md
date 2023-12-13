@@ -15,6 +15,34 @@ verification conditions are then dispatched to SMT solvers to
 be automatically solved.  We will have more to say about exactly
 what is meant by this correspondence below.
 
+## Building
+
+To build the verifier from source, first make sure you have met the following
+prerequisites:
+
+* Ensure that you have the `cabal` and `ghc` executables in your `PATH`. If you
+  don't already have them, we recommend using `ghcup` to install them:
+  https://www.haskell.org/ghcup/. We recommend `Cabal` 3.10 or newer, and one of
+  GHC 8.10, 9.2, or 9.4.
+
+* Ensure that you have the `clang` and `llvm-link` utilities from LLVM in your
+  `PATH`. Currently, LLVM versions up to 16 are supported. LLVM binaries are
+  available at https://github.com/llvm/llvm-project/releases.
+
+* Ensure that you have the `z3` SMT solver in your `PATH`. `z3` binaries are
+  available at https://github.com/Z3Prover/z3/releases.
+
+Then, clone the repo and run:
+
+```
+$ git submodule update --init
+$ cabal test copilot-verifier
+```
+
+This will clone the repository, build the verifier, and run the associated test
+suite. If you have performed all of the steps above correctly, the test suite
+should pass.
+
 ## Using the Copilot Verifier
 
 The main interface to the verifier is the `Copilot.Verifier.verify`
