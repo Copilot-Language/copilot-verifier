@@ -26,3 +26,11 @@ optional-packages:
   deps/llvm-pretty/
   deps/llvm-pretty-bc-parser/
   deps/what4/what4/
+
+-- Currently, copilot requires building with `optparse-applicative < 0.18`, but
+-- llvm-pretty-bc-parser's test suite requires building with
+-- `optparse-applicative >= 0.18`. We aren't terribly interested in running the
+-- llvm-pretty-bc-parser test suite here, so just disable it to permit a build
+-- plan that allows `optparse-applicative < 0.18`.
+package llvm-pretty-bc-parser
+  tests: False
