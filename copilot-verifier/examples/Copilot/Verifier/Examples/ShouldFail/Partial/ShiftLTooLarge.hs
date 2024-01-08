@@ -18,7 +18,7 @@ spec = do
       stream2 :: Stream Int64
       stream2 = extern "stream2" Nothing
 
-  _ <- prop "lessThanBitWidth" (forall
+  _ <- prop "lessThanBitWidth" (forAll
          (constI64 0 <= stream2 && stream2 < constI64 32))
   trigger "streamShiftL" ((stream1 .<<. stream2) == 1) [arg stream1, arg stream2]
 

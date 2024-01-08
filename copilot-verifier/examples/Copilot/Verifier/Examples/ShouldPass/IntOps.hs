@@ -15,8 +15,8 @@ spec = do
       shiftBy :: Stream Int16
       shiftBy = extern "shiftBy" Nothing
 
-  _ <- prop "nonzero" (forall (stream /= 0))
-  _ <- prop "shiftByBits" (forall (0 <= shiftBy && shiftBy < 16))
+  _ <- prop "nonzero" (forAll (stream /= 0))
+  _ <- prop "shiftByBits" (forAll (0 <= shiftBy && shiftBy < 16))
 
   triggerOp1 "abs" abs stream
   triggerOp1 "signum" signum stream

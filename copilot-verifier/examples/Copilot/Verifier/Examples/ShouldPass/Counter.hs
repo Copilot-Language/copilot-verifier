@@ -38,9 +38,9 @@ bytecounter2 = counter true ([False] ++ bytecounter2 == 255)
 
 spec :: Spec
 spec =
-  do _ <- prop "range" (forall (bytecounter == unsafeCast (resetcounter `mod` 256)))
-     _ <- prop "range2" (forall (0 <= bytecounter2 && bytecounter2 <= 255))
-     _ <- prop "same"  (forall ((0 <= bytecounter2 && bytecounter2 <= 255) &&
+  do _ <- prop "range" (forAll (bytecounter == unsafeCast (resetcounter `mod` 256)))
+     _ <- prop "range2" (forAll (0 <= bytecounter2 && bytecounter2 <= 255))
+     _ <- prop "same"  (forAll ((0 <= bytecounter2 && bytecounter2 <= 255) &&
                                 (bytecounter == unsafeCast (resetcounter `mod` 256)) &&
                                 (bytecounter == bytecounter2)))
      trigger "counter" true [arg $ bytecounter, arg $ bytecounter2]

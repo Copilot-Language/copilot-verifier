@@ -14,7 +14,7 @@ spec = do
   let stream :: Stream Int16
       stream = extern "stream" Nothing
 
-  _ <- prop "nonzero" (forall (stream /= 0))
+  _ <- prop "nonzero" (forAll (stream /= 0))
   trigger "streamMod" ((stream `mod` stream) == 1) [arg stream]
 
 verifySpec :: Verbosity -> IO ()
