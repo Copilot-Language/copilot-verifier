@@ -14,7 +14,7 @@ spec = do
   let stream :: Stream Int32
       stream = extern "stream" Nothing
 
-  _ <- prop "notIntMax" (forall (stream < constI32 maxBound))
+  _ <- prop "notIntMax" (forAll (stream < constI32 maxBound))
   trigger "streamAddSigned" ((stream + 1) == 1) [arg stream]
 
 verifySpec :: Verbosity -> IO ()

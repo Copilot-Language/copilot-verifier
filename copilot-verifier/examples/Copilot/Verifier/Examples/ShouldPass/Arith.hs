@@ -19,9 +19,9 @@ lastPrime = 31
 
 multRingSpec :: Spec
 multRingSpec = do
-  _ <- prop "clamp nonzero" (forall ((clamp > 0) && (clamp < lastPrime)))
-  _ <- prop "reduced" (forall (acc < lastPrime))
-  _ <- prop "nonzero" (forall (acc > 0 && (acc < lastPrime)))
+  _ <- prop "clamp nonzero" (forAll ((clamp > 0) && (clamp < lastPrime)))
+  _ <- prop "reduced" (forAll (acc < lastPrime))
+  _ <- prop "nonzero" (forAll (acc > 0 && (acc < lastPrime)))
 
   trigger "outofrange" (not (acc > 0 && acc < lastPrime)) [arg acc]
 

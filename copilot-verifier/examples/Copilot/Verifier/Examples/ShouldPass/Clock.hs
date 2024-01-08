@@ -31,8 +31,8 @@ spec :: Spec
 spec = do
   observer "clk"  clkStream
   observer "clk'" clkStream'
-  _ <- prop "clksPhase" (forall (clkStream == drop 2 clkStream'))
-  _ <- prop "clksDistinct" (forall (not (clkStream && clkStream')))
+  _ <- prop "clksPhase" (forAll (clkStream == drop 2 clkStream'))
+  _ <- prop "clksDistinct" (forAll (not (clkStream && clkStream')))
   trigger "clksHigh" (clkStream && clkStream') []
 
 

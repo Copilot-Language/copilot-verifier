@@ -15,7 +15,7 @@ spec = do
   let stream :: Stream Int32
       stream = extern "stream" Nothing
 
-  _ <- prop "notIntMin" (forall (stream > constI32 minBound))
+  _ <- prop "notIntMin" (forAll (stream > constI32 minBound))
   trigger "streamAbs" (abs stream == 1) [arg stream]
 
 verifySpec :: Verbosity -> IO ()

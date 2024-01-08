@@ -16,7 +16,7 @@ spec = do
   let stream :: Stream Int32
       stream = extern "stream" Nothing
 
-  _ <- prop "withinRange" (forall
+  _ <- prop "withinRange" (forAll
            (constI32 ((minBound P.+ 1) P.* 2) < stream
          && stream < constI32 ((maxBound P.- 1) `P.div` 2)))
   trigger "streamMulSigned" ((stream * 2) == 2) [arg stream]
