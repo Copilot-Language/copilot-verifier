@@ -23,6 +23,7 @@ import qualified Copilot.Verifier.Examples.ShouldFail.Partial.SubSignedWrap    a
 import qualified Copilot.Verifier.Examples.ShouldPass.Array                    as Array
 import qualified Copilot.Verifier.Examples.ShouldPass.ArrayGen                 as ArrayGen
 import qualified Copilot.Verifier.Examples.ShouldPass.ArrayOfStructs           as ArrayOfStructs
+import qualified Copilot.Verifier.Examples.ShouldPass.ArrayTriggerArgument     as ArrayTriggerArgument
 import qualified Copilot.Verifier.Examples.ShouldPass.Arith                    as Arith
 import qualified Copilot.Verifier.Examples.ShouldPass.Clock                    as Clock
 import qualified Copilot.Verifier.Examples.ShouldPass.Counter                  as Counter
@@ -62,6 +63,7 @@ shouldPassExamples verb = Map.fromList
     [ example "Array" (Array.verifySpec verb)
     , example "ArrayGen" (ArrayGen.verifySpec verb)
     , example "ArrayOfStructs" (ArrayOfStructs.verifySpec verb)
+    , example "ArrayTriggerArgument" (ArrayTriggerArgument.verifySpec verb)
     , example "Arith" (Arith.verifySpec verb)
     , example "Clock" (Clock.verifySpec verb)
     , example "Counter" (Counter.verifySpec verb)
