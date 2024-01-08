@@ -82,6 +82,7 @@ library copilot-verifier-examples
     Copilot.Verifier.Examples.ShouldPass.Array
     Copilot.Verifier.Examples.ShouldPass.ArrayGen
     Copilot.Verifier.Examples.ShouldPass.ArrayOfStructs
+    Copilot.Verifier.Examples.ShouldPass.ArrayTriggerArgument
     Copilot.Verifier.Examples.ShouldPass.Arith
     Copilot.Verifier.Examples.ShouldPass.Clock
     Copilot.Verifier.Examples.ShouldPass.Counter
