@@ -10,6 +10,7 @@ Build-type:    Simple
 Category:      Language
 Synopsis:      System for verifying the correctness of generated Copilot programs
 Description:
+extra-doc-files: CHANGELOG.md
 
 source-repository head
   type:     git
