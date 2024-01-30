@@ -3,7 +3,7 @@ Name:          copilot-verifier
 Version:       0.0
 Author:        Galois Inc.
 Maintainer:    rscott@galois.com
-Copyright:     (c) Galois, Inc 2021
+Copyright:     (c) Galois, Inc 2021-2024
 License:       BSD-3-Clause
 License-file:  LICENSE
 Build-type:    Simple
