@@ -11,6 +11,11 @@ Category:      Language
 Synopsis:      System for verifying the correctness of generated Copilot programs
 Description:
 
+source-repository head
+  type:     git
+  location: https://github.com/GaloisInc/copilot-verifier
+  subdir:   copilot-verifier
+
 common bldflags
   ghc-options: -Wall
                -Werror=incomplete-patterns
