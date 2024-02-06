@@ -1,5 +1,5 @@
 # Release history for copilot-verifier
 
-## next (TBA)
+## 0.1 (February 2024)
 
 * Initial release of `copilot-verifier.
