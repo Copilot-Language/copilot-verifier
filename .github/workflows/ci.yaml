@@ -73,6 +73,11 @@ jobs:
         name: Test copilot-verifier
         run: cabal test pkg:copilot-verifier
 
+      - shell: bash
+        name: Check copilot-verifier.cabal
+        run: cabal check
+        working-directory: copilot-verifier
+
       - uses: actions/cache/save@v3
         name: Save cabal store cache
         if: always()
