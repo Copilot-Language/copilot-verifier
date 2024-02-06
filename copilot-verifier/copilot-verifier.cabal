@@ -20,7 +20,7 @@ Description:
   meaning of the generated program corresponds in a precise way to the meaning
   of the original stream specification. The generated verification conditions
   are then dispatched to SMT solvers to be automatically solved.
-extra-doc-files: CHANGELOG.md
+extra-doc-files: CHANGELOG.md, README.md
 
 source-repository head
   type:     git
