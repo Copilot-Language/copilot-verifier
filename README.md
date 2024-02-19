@@ -1,3 +1,6 @@
+[![Build Status](https://github.com/Copilot-Language/copilot-verifier/workflows/copilot-verifier/badge.svg)](https://github.com/Copilot-Language/copilot-verifier/actions?query=workflow%3Acopilot-verifier)
+[![Version on Hackage](https://img.shields.io/hackage/v/copilot-verifier.svg)](https://hackage.haskell.org/package/copilot-verifier)
+
 # Copilot Verifier
 
 This "Copilot Verifier" is an add-on to the
