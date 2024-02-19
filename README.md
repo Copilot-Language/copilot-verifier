@@ -17,6 +17,10 @@ verification conditions are then dispatched to SMT solvers to
 be automatically solved.  We will have more to say about exactly
 what is meant by this correspondence below.
 
+Copilot Verifier is described in the ICFP 2024 paper [_Trustworthy Runtime
+Verification via Bisimulation (Experience
+Report)_](https://dl.acm.org/doi/abs/10.1145/3607841).
+
 ## Building
 
 To build the verifier from source, first make sure you have met the following
