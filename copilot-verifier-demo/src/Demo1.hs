@@ -27,6 +27,6 @@ main :: IO ()
 main = do
   interpret 6 spec
 
-  -- spec' <- reify spec
+  spec' <- reify spec
   -- compile "demo1" spec'
-  -- verify mkDefaultCSettings [] "demo1" spec'
+  verifyWithOptions defaultVerifierOptions{verbosity = Noisy} mkDefaultCSettings [] "demo1" spec'

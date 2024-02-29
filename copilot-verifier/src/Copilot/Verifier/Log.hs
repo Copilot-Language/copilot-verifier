@@ -81,6 +81,15 @@ data CopilotLogMessage where
     -> Integer
        -- ^ Number of total goals
     -> CopilotLogMessage
+  SuccessfulProofSummary ::
+       FilePath
+       -- ^ Name of the generated C file.
+    -> Integer
+       -- ^ Number of goals proven during for the initial state of the proof.
+    -> Integer
+       -- ^ Number of goals proven during the bisimulation step of the proof.
+    -> CopilotLogMessage
+  NoisyVerbositySuggestion :: CopilotLogMessage
 
   -----
   -- Types of proof goals the verifier emits
@@ -448,6 +457,36 @@ copilotLogMessageToSayWhat (OnlySomeGoalsProved numProvedGoals numTotalGoals) =
     [ "Proved", T.pack (show numProvedGoals)
     , "of"
     , T.pack (show numTotalGoals), "total goals"
+    ]
+copilotLogMessageToSayWhat (SuccessfulProofSummary cFileName initGoals bisimGoals) =
+  copilotSimply $ T.unlines
+    [ ""
+    , "copilot-verifier has produced a mathematical proof that the behavior of"
+    , "the generated C program (" <> T.pack cFileName
+      <> ") precisely matches the behavior of"
+    , "the Copilot specification. This proof shows that the behaviors match for"
+    , "all possible moments in time, and in doing so, copilot-verifier examined"
+    , "how the programs behave at the start of execution (the \"initial state\")"
+    , "and at an arbitrary point of time in execution (the \"step bisimulation\")."
+    , "copilot-verifier decomposed the overall proof into smaller goals, the"
+    , "number of which depends on the size and complexity of the program. In this"
+    , "example, there are " <> T.pack (show initGoals) <> " initial state goal(s)"
+      <> " and " <> T.pack (show bisimGoals) <> " step bisimulation goal(s),"
+    , "and copilot-verifier was able to prove all of them."
+    ]
+copilotLogMessageToSayWhat NoisyVerbositySuggestion =
+  copilotSimply $ T.unlines
+    [ ""
+    , "copilot-verifier is displaying an abridged summary of the verification results."
+    , "copilot-verifier also includes a \"noisy\" mode that prints detailed"
+    , "descriptions of each individual proof goal, including what type of goal it is,"
+    , "why it needs to be proven, and where in the Copilot specification and/or C code"
+    , "the proof goal originated from. To enable noisy mode, invoke the verifier with"
+    , "the following options:"
+    , ""
+    , "```"
+    , "verifyWithOptions (defaultVerifierOptions { verbosity = Noisy }) ..."
+    , "```"
     ]
 copilotLogMessageToSayWhat
     (StreamValueEqualityProofGoal step goalIdx numTotalGoals

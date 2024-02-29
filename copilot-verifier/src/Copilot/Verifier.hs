@@ -255,7 +255,7 @@ verifyWithOptions opts csettings0 properties prefix spec =
      Log.sayCopilot $ Log.CompiledBitcodeFile prefix bcFile
 
      -- Run the main verification procedure
-     verifyBitcode opts csettings properties spec cruxOpts llvmOpts bcFile
+     verifyBitcode opts csettings properties spec cruxOpts llvmOpts csrc bcFile
 
 
 -- | Do the (surprisingly large amount) of options munging necessary to set up
@@ -325,9 +325,10 @@ verifyBitcode ::
   Spec        {- ^ The input Copilot specification -} ->
   CruxOptions {- ^ Crux options -} ->
   LLVMOptions {- ^ CruxLLVM options -} ->
+  FilePath    {- ^ Path to the generated C file (for logging purposes only) -} ->
   FilePath    {- ^ Path to the bitcode file to verify -} ->
   IO ()
-verifyBitcode opts csettings properties spec cruxOpts llvmOpts bcFile =
+verifyBitcode opts csettings properties spec cruxOpts llvmOpts cFile bcFile =
   do -- Set up the expression builder and symbolic backend
      halloc <- newHandleAllocator
      sym <- newExprBuilder FloatUninterpretedRepr CopilotVerifierData globalNonceGenerator
@@ -383,13 +384,28 @@ verifyBitcode opts csettings properties spec cruxOpts llvmOpts bcFile =
           -- First check that the initial state of the program matches the starting
           -- segment of the associated Copilot streams.
           let cruxOptsInit = setCruxOfflineSolverOutput "initial-step" cruxOpts
-          verifyInitialState cruxOptsInit adapters clRefs simctx initialMem
-             (CW4.initialStreamState proofStateBundle)
+          initGoals <-
+            verifyInitialState cruxOptsInit adapters clRefs simctx initialMem
+              (CW4.initialStreamState proofStateBundle)
 
           -- Now, the real meat. Carry out the bisimulation step of the proof.
           let cruxOptsTrans = setCruxOfflineSolverOutput "transition-step" cruxOpts
-          verifyStepBisimulation opts cruxOptsTrans adapters csettings
-             clRefs simctx llvmMod trans memVar initialMem proofStateBundle
+          bisimGoals <-
+            verifyStepBisimulation opts cruxOptsTrans adapters csettings
+              clRefs simctx llvmMod trans memVar initialMem proofStateBundle
+
+          Log.sayCopilot $ Log.SuccessfulProofSummary cFile initGoals bisimGoals
+          -- We only want to inform users about Noisy if the verbosity level is
+          -- sufficiently low. Crux's logging framework isn't particularly
+          -- suited to doing this, as it assumes that all log messages enabled
+          -- for low verbosity levels should also be enabled for higher
+          -- verbosity levels. That is a reasonable assumption most of the time,
+          -- but not here.
+          --
+          -- To compensate, we hack around the issue by manually checking the
+          -- verbosity level before logging the message.
+          when (verbosity opts < Noisy) $
+            Log.sayCopilot Log.NoisyVerbositySuggestion
   where
     -- If @logSmtInteractions@ is enabled, enable offline solver output in the
     -- supplied 'CruxOptions' with the supplied file template. Otherwise, return
@@ -433,7 +449,7 @@ verifyInitialState ::
   SimCtxt Crux sym LLVM ->
   MemImpl sym ->
   CW4.BisimulationProofState sym ->
-  IO ()
+  IO Integer
 verifyInitialState cruxOpts adapters clRefs simctx mem initialState =
   withBackend simctx $ \bak ->
   do Log.sayCopilot $ Log.ComputingConditions Log.InitialState
@@ -473,7 +489,7 @@ verifyStepBisimulation ::
   GlobalVar Mem ->
   MemImpl sym ->
   CW4.BisimulationProofBundle sym ->
-  IO ()
+  IO Integer
 verifyStepBisimulation opts cruxOpts adapters csettings clRefs simctx llvmMod modTrans memVar mem prfbundle =
   withBackend simctx $ \bak ->
   do Log.sayCopilot $ Log.ComputingConditions Log.StepBisimulation
@@ -1279,7 +1295,7 @@ proveObls ::
   CopilotLogRefs sym ->
   Log.VerificationStep ->
   SimCtxt Crux sym LLVM ->
-  IO ()
+  IO Integer
 proveObls cruxOpts adapters clRefs step simctx =
   withBackend simctx $ \bak ->
   do let sym = backendGetSym bak
@@ -1300,6 +1316,9 @@ summarizeObls _ Nothing = []
 summarizeObls _ (Just obls) = map (view labeledPredMsg . proofGoal) (goalsToList obls)
 -}
 
+-- | Compute the number of goals that were proven during verification, logging
+-- the goals as they are proven. If all goals are proven successfully, return
+-- the number of goals. Otherwise, log the failing proof goals and abort.
 presentResults ::
   Log.Logs msgs =>
   Log.SupportsCopilotLogMessage msgs =>
@@ -1309,15 +1328,17 @@ presentResults ::
   LLVMAnnMap sym ->
   Log.VerificationStep ->
   (ProcessedGoals, Maybe (Goals (Assumptions sym) (Assertion sym, [ProgramLoc], ProofResult sym))) ->
-  IO ()
+  IO Integer
 presentResults sym vaMap laMap step (num, goals)
   | numTotalGoals == 0
-  = Log.sayCopilot Log.AllGoalsProved
+  = do Log.sayCopilot Log.AllGoalsProved
+       pure 0
 
     -- All goals were proven
   | numProvedGoals == numTotalGoals
   = do traverse_ (logVerifierAssertions sym vaMap laMap step num) goals
        printGoals
+       pure numProvedGoals
 
     -- There were some unproved goals, so fail with exit code 1
   | otherwise
