@@ -9,13 +9,12 @@
 module Copilot.Verifier.Examples.ShouldPass.WCV where
 
 import Language.Copilot
-import qualified Copilot.Theorem.What4 as CT
+-- import qualified Copilot.Theorem.What4 as CT
 import Copilot.Compile.C99
 import Copilot.Verifier ( Verbosity, VerifierOptions(..)
                         , defaultVerifierOptions, verifyWithOptions )
 
-import qualified Prelude as P
-import Data.Foldable (forM_)
+-- import Data.Foldable (forM_)
 import qualified Control.Monad as Monad
 
 
@@ -36,44 +35,6 @@ tcoathr :: Stream Double
 tcoathr = extern "tcoathr" Nothing
 
 type Vect2 = (Stream Double, Stream Double)
-
-
---------------------------------
--- External streams for relative position and velocity.
---------------------------------
-
--- | The relative x velocity between ownship and the intruder.
-vx :: Stream Double
-vx = extern "relative_velocity_x" Nothing
-
--- | The relative y velocity between ownship and the intruder.
-vy :: Stream Double
-vy = extern "relative_velocity_y" Nothing
-
--- | The relative z velocity between ownship and the intruder.
-vz :: Stream Double
-vz = extern "relative_velocity_z" Nothing
-
--- | The relative velocity as a 2D vector.
-v :: (Stream Double, Stream Double)
-v = (vx, vy)
-
-
--- | The relative x position between ownship and the intruder.
-sx :: Stream Double
-sx = extern "relative_position_x" Nothing
-
--- | The relative y position between ownship and the intruder.
-sy :: Stream Double
-sy = extern "relative_position_y" Nothing
-
--- | The relative z position between ownship and the intruder.
-sz :: Stream Double
-sz = extern "relative_position_z" Nothing
-
--- | The relative position as a 2D vector.
-s :: (Stream Double, Stream Double)
-s = (sx, sy)
 
 
 ------------------
@@ -169,7 +130,41 @@ horizontalWCV tvar s v =
   (norm s <= dthr) ||
   (((dcpa s v) <= dthr) && (0 <= (tvar s v)) && ((tvar s v) <= tthr))
 
+spec :: Spec
 spec = do
+  -- External streams for relative position and velocity.
+  let -- The relative x velocity between ownship and the intruder.
+      vx :: Stream Double
+      vx = extern "relative_velocity_x" Nothing
+
+      -- The relative y velocity between ownship and the intruder.
+      vy :: Stream Double
+      vy = extern "relative_velocity_y" Nothing
+
+      -- The relative z velocity between ownship and the intruder.
+      vz :: Stream Double
+      vz = extern "relative_velocity_z" Nothing
+
+      -- The relative velocity as a 2D vector.
+      v :: (Stream Double, Stream Double)
+      v = (vx, vy)
+
+
+      -- The relative x position between ownship and the intruder.
+      sx :: Stream Double
+      sx = extern "relative_position_x" Nothing
+
+      -- The relative y position between ownship and the intruder.
+      sy :: Stream Double
+      sy = extern "relative_position_y" Nothing
+
+      -- The relative z position between ownship and the intruder.
+      sz :: Stream Double
+      sz = extern "relative_position_z" Nothing
+
+      -- The relative position as a 2D vector.
+      s :: (Stream Double, Stream Double)
+      s = (sx, sy)
   Monad.void $ prop "1a" (forAll $ (tau s v) ~= (tau (neg s) (neg v)))
   -- Monad.void $ prop "3d" (forAll $ (wcv tep s sz v vz)    == (wcv tep (neg s) (-sz) (neg v) (-vz)))
   trigger "well_clear_violation" (wcv tep s sz v vz) []
