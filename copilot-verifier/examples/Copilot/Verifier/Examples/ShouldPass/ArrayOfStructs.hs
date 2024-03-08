@@ -10,7 +10,7 @@ import Language.Copilot
 data S = S { field :: Field "field" Int16 }
 
 instance Struct S where
-  typename _ = "s"
+  typeName _ = "s"
   toValues s = [Value Int16 (field s)]
 
 instance Typed S where
