@@ -1,4 +1,5 @@
 2024-03-08
+        * Provide more detailed feedback upon a successful run of the verifier.
         * Make the examples build with Copilot 3.19. (#53)
 
 2024-02-06
