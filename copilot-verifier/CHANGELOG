@@ -1,2 +1,5 @@
+2024-03-08
+        * Make the examples build with Copilot 3.19. (#53)
+
 2024-02-06
         * Initial release of `copilot-verifier`.
