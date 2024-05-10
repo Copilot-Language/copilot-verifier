@@ -49,6 +49,17 @@ This will clone the repository, build the verifier, and run the associated test
 suite. If you have performed all of the steps above correctly, the test suite
 should pass.
 
+We also provide a [Dockerfile](Dockerfile) which automates the process of
+installing Copilot and the verifier. The Dockerfile can be built and run using
+the following commands:
+
+```
+$ docker build -t <tag> .
+$ docker run -it <tag>
+```
+
+Where `<tag>` is a unique name for the Docker image.
+
 ## Using the Copilot Verifier
 
 The main interface to the verifier is the `Copilot.Verifier.verify`
