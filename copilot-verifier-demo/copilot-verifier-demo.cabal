@@ -27,9 +27,6 @@ common bldflags
     copilot,
     copilot-c99,
     copilot-core,
-    copilot-libraries,
-    copilot-language,
-    copilot-theorem,
     copilot-verifier
 
 library

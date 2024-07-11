@@ -45,12 +45,8 @@ common bldflags
     bv-sized >= 1.0.0 && < 1.1,
     bytestring,
     containers >= 0.5.9.0,
-    copilot >= 3.19 && < 3.20,
     copilot-c99 >= 3.19 && < 3.20,
     copilot-core >= 3.19 && < 3.20,
-    copilot-libraries >= 3.19 && < 3.20,
-    copilot-language >= 3.19 && < 3.20,
-    copilot-prettyprinter >= 3.19 && < 3.20,
     copilot-theorem >= 3.19 && < 3.20,
     crucible >= 0.7 && < 0.8,
     crucible-llvm >= 0.6 && < 0.7,
@@ -82,6 +78,9 @@ library copilot-verifier-examples
   hs-source-dirs: examples
   build-depends:
     case-insensitive,
+    copilot >= 3.19 && < 3.20,
+    copilot-language >= 3.19 && < 3.20,
+    copilot-prettyprinter >= 3.19 && < 3.20,
     copilot-verifier
   exposed-modules:
     Copilot.Verifier.Examples
