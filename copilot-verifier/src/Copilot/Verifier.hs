@@ -455,7 +455,8 @@ verifyInitialState cruxOpts adapters clRefs simctx mem initialState =
   do Log.sayCopilot $ Log.ComputingConditions Log.InitialState
      frm <- pushAssumptionFrame bak
 
-     assertStateRelation bak clRefs mem initialState
+     assertStateRelation bak clRefs mem
+       Log.InitialStateRelation initialState
 
      popUntilAssumptionFrame bak frm
 
@@ -500,7 +501,8 @@ verifyStepBisimulation opts cruxOpts adapters csettings clRefs simctx llvmMod mo
         mem' <- setupPrestate bak mem prfbundle
 
         -- sanity check, verify that we set up the memory in the expected relation
-        assertStateRelation bak clRefs mem' (CW4.preStreamState prfbundle)
+        assertStateRelation bak clRefs mem'
+          Log.PreStepStateRelation (CW4.preStreamState prfbundle)
 
         -- set up trigger guard global variables
         let halloc = simHandleAllocator simctx
@@ -515,7 +517,8 @@ verifyStepBisimulation opts cruxOpts adapters csettings clRefs simctx llvmMod mo
         mem'' <- executeStep opts csettings clRefs simctx memVar mem' llvmMod modTrans triggerGlobals overrides (CW4.assumptions prfbundle) (CW4.sideConds prfbundle)
 
         -- assert the poststate is in the relation
-        assertStateRelation bak clRefs mem'' (CW4.postStreamState prfbundle)
+        assertStateRelation bak clRefs mem''
+          Log.PostStepStateRelation (CW4.postStreamState prfbundle)
 
      popUntilAssumptionFrame bak frm
 
@@ -838,13 +841,13 @@ assertStateRelation ::
   HasLLVMAnn sym =>
   (?memOpts :: MemOptions) =>
   (?lc :: TypeContext) =>
-
   bak ->
   CopilotLogRefs sym ->
   MemImpl sym ->
+  Log.StateRelationStep ->
   CW4.BisimulationProofState sym ->
   IO ()
-assertStateRelation bak clRefs mem prfst =
+assertStateRelation bak clRefs mem stateRelStep prfst =
   -- For each stream in the proof state, assert that the
   -- generated ring buffer global contains the corresponding
   -- values.
@@ -882,7 +885,7 @@ assertStateRelation bak clRefs mem prfst =
         modifyIORef' (verifierAssertionMapRef clRefs)
           $ Map.insert bannIdxVal
           $ Log.RingBufferIndexLoadAssertion
-          $ Log.RingBufferIndexLoad sym locIdxVal (Text.pack idxName) pIdxVal
+          $ Log.RingBufferIndexLoad sym stateRelStep locIdxVal (Text.pack idxName) pIdxVal
 
         buflen'  <- bvLit sym ?ptrWidth (BV.mkBV ?ptrWidth buflen)
         typeLen' <- bvLit sym ?ptrWidth (BV.mkBV ?ptrWidth (toInteger typeLen))
@@ -903,7 +906,7 @@ assertStateRelation bak clRefs mem prfst =
                $ Map.insert bannv'
                $ Log.RingBufferLoadAssertion
                $ Log.SomeSome
-               $ Log.RingBufferLoad sym locv' bufNameT i buflen ctp typeRepr pv'
+               $ Log.RingBufferLoad sym stateRelStep locv' bufNameT i buflen ctp typeRepr pv'
              eq <- computeEqualVals bak clRefs mem ctp v typeRepr v'
              (ann, eq') <- annotateTerm sym eq
              let shortmsg = "State equality condition: " ++ show nm ++ " index value " ++ show i
@@ -914,7 +917,7 @@ assertStateRelation bak clRefs mem prfst =
                $ Map.insert (BoolAnn ann)
                $ Log.StreamValueEqualityAssertion
                $ Log.SomeSome
-               $ Log.StreamValueEquality sym loc bufNameT i buflen ctp v typeRepr v'
+               $ Log.StreamValueEquality sym stateRelStep loc bufNameT i buflen ctp v typeRepr v'
              addDurableProofObligation bak (LabeledPred eq' (SimError loc rsn))
 
         return ()

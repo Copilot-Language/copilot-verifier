@@ -13,6 +13,7 @@ module Copilot.Verifier.Log
   ( SupportsCopilotLogMessage
   , CopilotLogMessage(..)
   , VerificationStep(..)
+  , StateRelationStep(..)
   , VerifierAssertion(..)
   , SomeSome(..)
   , StreamValueEquality(..)
@@ -187,6 +188,21 @@ data VerificationStep
   deriving stock Generic
   deriving anyclass ToJSON
 
+-- | At what step of the proof are we checking the state relation? We record
+-- this so that we can better distinguish between transition step–related
+-- proof goals that arise before or after calling the @step()@ function.
+data StateRelationStep
+  = InitialStateRelation
+    -- ^ Check the state relation for the initial state.
+  | PreStepStateRelation
+    -- ^ During the transition step of the proof, check the state relation
+    -- before calling the @step()@ function.
+  | PostStepStateRelation
+    -- ^ During the transition step of the proof, check the state relation
+    -- after calling the @step()@ function.
+  deriving stock Generic
+  deriving anyclass ToJSON
+
 -- | Types of assertions that the verifier can make, which will count towards
 -- the total number of proof goals.
 data VerifierAssertion sym
@@ -211,6 +227,8 @@ data SomeSome (f :: j -> k -> Type) where
 data StreamValueEquality sym copilotType crucibleType where
   StreamValueEquality ::
        sym
+    -> StateRelationStep
+       -- ^ When the values are checked for equality
     -> WPL.ProgramLoc
        -- ^ The locations of the values
     -> Text
@@ -271,8 +289,10 @@ data TriggerArgumentEquality sym copilotType crucibleType where
 data RingBufferLoad sym copilotType crucibleType where
   RingBufferLoad ::
        sym
+    -> StateRelationStep
+       -- ^ When the ring buffer is loaded from
     -> WPL.ProgramLoc
-       -- ^ The location of the trigger
+       -- ^ The location of the buffer
     -> Text
        -- ^ The name of the buffer
     -> Integer
@@ -293,8 +313,10 @@ data RingBufferLoad sym copilotType crucibleType where
 data RingBufferIndexLoad sym where
   RingBufferIndexLoad ::
        sym
+    -> StateRelationStep
+       -- ^ When the index's global variable is loaded from
     -> WPL.ProgramLoc
-       -- ^ The location of the trigger
+       -- ^ The location of the global index
     -> Text
        -- ^ The name of the global index
     -> WI.Pred sym
@@ -489,15 +511,15 @@ copilotLogMessageToSayWhat NoisyVerbositySuggestion =
     , "```"
     ]
 copilotLogMessageToSayWhat
-    (StreamValueEqualityProofGoal step goalIdx numTotalGoals
+    (StreamValueEqualityProofGoal verifStep goalIdx numTotalGoals
       (StreamValueEquality
-        sym loc
+        sym stateRelStep loc
         bufName offset len
         copilotTy copilotVal
         crucibleTy crucibleVal)) =
   copilotNoisily $
-  displayProofGoal
-    step goalIdx numTotalGoals
+  displayStateRelationProofGoal
+    verifStep stateRelStep goalIdx numTotalGoals
     "asserting the equality between two stream values"
     [ renderStrict $ ppProgramLoc loc
     , "* Ring buffer name: " <> bufName
@@ -544,12 +566,12 @@ copilotLogMessageToSayWhat
     , renderStrict $ PP.indent 4 $ ppCrucibleValue sym crucibleTy crucibleVal
     ]
 copilotLogMessageToSayWhat
-    (RingBufferLoadProofGoal step goalIdx numTotalGoals
+    (RingBufferLoadProofGoal verifStep goalIdx numTotalGoals
       (RingBufferLoad
-        _sym loc bufName offset len copilotTy _crucibleTy p)) =
+        _sym stateRelStep loc bufName offset len copilotTy _crucibleTy p)) =
   copilotNoisily $
-  displayProofGoal
-    step goalIdx numTotalGoals
+  displayStateRelationProofGoal
+    verifStep stateRelStep goalIdx numTotalGoals
     "asserting the validity of a memory load from a stream's ring buffer in C"
     [ renderStrict $ ppProgramLoc loc
     , "* Ring buffer name: " <> bufName
@@ -560,11 +582,11 @@ copilotLogMessageToSayWhat
     , renderStrict $ PP.indent 4 $ WI.printSymExpr p
     ]
 copilotLogMessageToSayWhat
-    (RingBufferIndexLoadProofGoal step goalIdx numTotalGoals
-      (RingBufferIndexLoad _sym loc idxName p)) =
+    (RingBufferIndexLoadProofGoal verifStep goalIdx numTotalGoals
+      (RingBufferIndexLoad _sym stateRelStep loc idxName p)) =
   copilotNoisily $
-  displayProofGoal
-    step goalIdx numTotalGoals
+  displayStateRelationProofGoal
+    verifStep stateRelStep goalIdx numTotalGoals
     "asserting the validity of a memory load from the index to a stream's ring buffer in C"
     [ renderStrict $ ppProgramLoc loc
     , "* Ring buffer index name: " <> idxName
@@ -683,6 +705,28 @@ displayProofGoal step goalIdx numTotalGoals why ls = T.unlines $
           "initial bisimulation state step"
         StepBisimulation ->
           "transition step of bisimulation"
+
+-- | Display information about an emitted proof goal that involves checking the
+-- state relation.
+displayStateRelationProofGoal ::
+     VerificationStep
+  -> StateRelationStep
+  -> Integer
+  -> Integer
+  -> Text
+  -> [Text]
+  -> Text
+displayStateRelationProofGoal verifStep stateRelStep goalIdx numTotalGoals why =
+    displayProofGoal verifStep goalIdx numTotalGoals why'
+  where
+    why' :: Text
+    why' =
+      case stateRelStep of
+        PreStepStateRelation  -> why <> " before calling step()"
+        PostStepStateRelation -> why <> " after calling step()"
+        -- `displayProofGoal` already makes a note of the fact that we're
+        -- checking the initial state, so no need to do so again here.
+        InitialStateRelation -> why
 
 ppProgramLoc :: WPL.ProgramLoc -> PP.Doc a
 ppProgramLoc pl = PP.vcat
