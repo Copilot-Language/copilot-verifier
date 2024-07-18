@@ -1,3 +1,7 @@
+2024-07-18
+        * When using `Noisy` verbosity, log more information about which proof
+          goals arise before or after calling the `step()` function. (#52)
+
 2024-07-11
         * Version bump (3.20). (#58)
 
