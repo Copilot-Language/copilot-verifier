@@ -188,6 +188,19 @@ data VerificationStep
   deriving stock Generic
   deriving anyclass ToJSON
 
+-- | The provenance of an assertion.
+data AssertionProvenance
+  = VerifierProvenance
+    -- ^ Assertions that the verifier directly makes to check the correspondence
+    -- between the Copilot specification and the generated C code. Because these
+    -- assertions are core to the proof that the verifier is computing, these
+    -- assertions' proof goals are always logged, even if they are trivial.
+  | StepExecutionProvenance
+    -- ^ Assertions that arise during symbolic execution of the @step()@
+    -- function as part of proving the memory safety of the generated C code.
+    -- These assertions' proof goals are only logged if they are non-trivial,
+    -- as there would be an excessive number of these proof goals otherwise.
+
 -- | At what step of the proof are we checking the state relation? We record
 -- this so that we can better distinguish between transition step–related
 -- proof goals that arise before or after calling the @step()@ function.
@@ -519,7 +532,7 @@ copilotLogMessageToSayWhat
         crucibleTy crucibleVal)) =
   copilotNoisily $
   displayStateRelationProofGoal
-    verifStep stateRelStep goalIdx numTotalGoals
+    verifStep stateRelStep VerifierProvenance goalIdx numTotalGoals
     "asserting the equality between two stream values"
     [ renderStrict $ ppProgramLoc loc
     , "* Ring buffer name: " <> bufName
@@ -536,7 +549,7 @@ copilotLogMessageToSayWhat
       (TriggersInvokedCorrespondingly loc name expected actual)) =
   copilotNoisily $
   displayProofGoal
-    step goalIdx numTotalGoals
+    step VerifierProvenance goalIdx numTotalGoals
     "asserting triggers fired in corresponding ways"
     [ renderStrict $ ppProgramLoc loc
     , "* Trigger name: " <> T.pack name
@@ -554,7 +567,7 @@ copilotLogMessageToSayWhat
         crucibleTy crucibleVal)) =
   copilotNoisily $
   displayProofGoal
-    step goalIdx numTotalGoals
+    step VerifierProvenance goalIdx numTotalGoals
     "asserting the equality between two trigger arguments"
     [ renderStrict $ ppProgramLoc loc
     , "* Trigger name: " <> T.pack triggerName
@@ -571,7 +584,7 @@ copilotLogMessageToSayWhat
         _sym stateRelStep loc bufName offset len copilotTy _crucibleTy p)) =
   copilotNoisily $
   displayStateRelationProofGoal
-    verifStep stateRelStep goalIdx numTotalGoals
+    verifStep stateRelStep VerifierProvenance goalIdx numTotalGoals
     "asserting the validity of a memory load from a stream's ring buffer in C"
     [ renderStrict $ ppProgramLoc loc
     , "* Ring buffer name: " <> bufName
@@ -586,7 +599,7 @@ copilotLogMessageToSayWhat
       (RingBufferIndexLoad _sym stateRelStep loc idxName p)) =
   copilotNoisily $
   displayStateRelationProofGoal
-    verifStep stateRelStep goalIdx numTotalGoals
+    verifStep stateRelStep VerifierProvenance goalIdx numTotalGoals
     "asserting the validity of a memory load from the index to a stream's ring buffer in C"
     [ renderStrict $ ppProgramLoc loc
     , "* Ring buffer index name: " <> idxName
@@ -599,7 +612,7 @@ copilotLogMessageToSayWhat
         _sym loc copilotTy _crucibleTy p)) =
   copilotNoisily $
   displayProofGoal
-    step goalIdx numTotalGoals
+    step VerifierProvenance goalIdx numTotalGoals
     "asserting the validity of a memory load from a pointer argument to a trigger"
     [ renderStrict $ ppProgramLoc loc
     , "* Copilot type: " <> T.pack (showsCopilotType 0 copilotTy "")
@@ -611,7 +624,7 @@ copilotLogMessageToSayWhat
       (AccessorFunctionLoad _sym loc accessorName p)) =
   copilotNoisily $
   displayProofGoal
-    step goalIdx numTotalGoals
+    step StepExecutionProvenance goalIdx numTotalGoals
     "asserting the validity of a memory load from a stream accessor function"
     [ renderStrict $ ppProgramLoc loc
     , "* Accessor function name: " <> WF.functionName accessorName
@@ -623,7 +636,7 @@ copilotLogMessageToSayWhat
       (GuardFunctionLoad _sym loc accessorName p)) =
   copilotNoisily $
   displayProofGoal
-    step goalIdx numTotalGoals
+    step StepExecutionProvenance goalIdx numTotalGoals
     "asserting the validity of a memory load from a trigger guard function"
     [ renderStrict $ ppProgramLoc loc
     , "* Guard function name: " <> WF.functionName accessorName
@@ -635,7 +648,7 @@ copilotLogMessageToSayWhat
       (UnknownFunctionLoad _sym loc accessorName p)) =
   copilotNoisily $
     displayProofGoal
-    step goalIdx numTotalGoals
+    step StepExecutionProvenance goalIdx numTotalGoals
     "asserting the validity of a memory load from an unknown function"
     [ renderStrict $ ppProgramLoc loc
     , "* Function name: " <> WF.functionName accessorName
@@ -658,7 +671,7 @@ copilotLogMessageToSayWhat
     LCLE.BBUndefinedBehavior ub ->
       copilotNoisily $
       displayProofGoal
-        step goalIdx numTotalGoals
+        step StepExecutionProvenance goalIdx numTotalGoals
         "asserting that LLVM undefined behavior does not occur"
         $ ppLoc : ppCallStackLines ++
         [ "* Undefined behavior description:"
@@ -667,7 +680,7 @@ copilotLogMessageToSayWhat
     LCLE.BBMemoryError me ->
       copilotNoisily $
       displayProofGoal
-        step goalIdx numTotalGoals
+        step StepExecutionProvenance goalIdx numTotalGoals
         "asserting that LLVM memory unsafety does not occur"
         $ ppLoc : ppCallStackLines ++
         [ "* Memory unsafety description:"
@@ -681,15 +694,17 @@ describeVerificationStep StepBisimulation = "step bisimulation"
 -- | Display information about an emitted proof goal.
 displayProofGoal ::
      VerificationStep
+  -> AssertionProvenance
   -> Integer
   -> Integer
   -> Text
   -> [Text]
   -> Text
-displayProofGoal step goalIdx numTotalGoals why ls = T.unlines $
+displayProofGoal step assertProv goalIdx numTotalGoals why ls = T.unlines $
   [ banner
   , "Emitted a proof goal (" <> why <> ")"
   , "  During the " <> displayStep
+  , "  Required for proving the " <> displayAssertProv
   , "  Proof goal " <> T.pack (show goalIdx)
                     <> " ("
                     <> T.pack (show numTotalGoals)
@@ -705,19 +720,26 @@ displayProofGoal step goalIdx numTotalGoals why ls = T.unlines $
           "initial bisimulation state step"
         StepBisimulation ->
           "transition step of bisimulation"
+    displayAssertProv =
+      case assertProv of
+        VerifierProvenance ->
+          "correspondence between the spec and C code"
+        StepExecutionProvenance ->
+          "memory safety of the generated step() function"
 
 -- | Display information about an emitted proof goal that involves checking the
 -- state relation.
 displayStateRelationProofGoal ::
      VerificationStep
   -> StateRelationStep
+  -> AssertionProvenance
   -> Integer
   -> Integer
   -> Text
   -> [Text]
   -> Text
-displayStateRelationProofGoal verifStep stateRelStep goalIdx numTotalGoals why =
-    displayProofGoal verifStep goalIdx numTotalGoals why'
+displayStateRelationProofGoal verifStep stateRelStep assertProv goalIdx numTotalGoals why =
+    displayProofGoal verifStep assertProv goalIdx numTotalGoals why'
   where
     why' :: Text
     why' =

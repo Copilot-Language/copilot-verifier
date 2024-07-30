@@ -66,7 +66,8 @@ import Lang.Crucible.Backend
   , pushAssumptionFrame, popUntilAssumptionFrame
   , getProofObligations, clearProofObligations
   , LabeledPred(..), abortExecBecause, AbortExecReason(..), addAssumption
-  , addDurableProofObligation, assert, CrucibleAssumption(..), ppAbortExecReason
+  , addDurableAssertion, addDurableProofObligation
+  , CrucibleAssumption(..), ppAbortExecReason
   , IsSymBackend(..), HasSymInterface(..)
   , labeledPred, labeledPredMsg
   -- , ProofObligations, proofGoal, goalsToList, labeledPredMsg
@@ -1239,8 +1240,13 @@ check that the value in each global variable is equal to
 `if guard_cond then 1 else 0`.
 -}
 
--- | Like @crucible-llvm@'s @doLoad@, but also returning the 'BoolAnn' and
--- 'Pred' asserting the validity of the load.
+-- | Like @crucible-llvm@'s @doLoad@, but with the following differences:
+--
+-- * This function returns the 'BoolAnn' and 'Pred' asserting the validity of
+--   the load, which the verifier needs for logging purposes.
+--
+-- * This always generates a durable proof goal so that Crucible will always
+--   record it, even if it is trivial.
 doLoadWithAnn ::
   ( IsSymBackend sym bak, HasPtrWidth wptr, HasLLVMAnn sym
   , ?memOpts :: MemOptions ) =>
@@ -1259,24 +1265,29 @@ doLoadWithAnn bak mem ptr valType tpr alignment = do
   where
     sym = backendGetSym bak
 
--- | Like @crucible-llvm@'s @assertSafe@, but also returning the 'BoolAnn' and
--- 'Pred' corresponding the assertion.
+-- | Like @crucible-llvm@'s @assertSafe@, but with the following differences:
+--
+-- * This function returns the 'BoolAnn' and 'Pred' corresponding to the
+--   assertion, which the verifier needs for logging purposes.
+--
+-- * This generates a durable assertion so that Crucible will always record it,
+--   even if it is trivial.
 assertSafeWithAnn ::
   IsSymBackend sym bak =>
   bak ->
   PartLLVMVal sym ->
   IO (BoolAnn sym, Pred sym, LLVMVal sym)
-assertSafeWithAnn bak partVal =
+assertSafeWithAnn bak partVal = do
+  loc <- getCurrentProgramLoc sym
+  let err = SimError loc rsn
   case partVal of
     NoErr p v -> do
       (ann, p') <- annotateTerm sym p
-      assert bak p' rsn
+      addDurableAssertion bak (LabeledPred p' err)
       return (BoolAnn ann, p', v)
     Err p -> do
-      loc <- getCurrentProgramLoc sym
-      let err = SimError loc rsn
       (_ann, p') <- annotateTerm sym p
-      addProofObligation bak (LabeledPred p' err)
+      addDurableProofObligation bak (LabeledPred p' err)
       abortExecBecause (AssertionFailure err)
   where
     rsn = AssertFailureSimError "Error during memory load" ""
