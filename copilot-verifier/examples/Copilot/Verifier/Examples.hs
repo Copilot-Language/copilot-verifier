@@ -41,6 +41,7 @@ import qualified Copilot.Verifier.Examples.ShouldPass.Partial.ShiftLTooLarge   a
 import qualified Copilot.Verifier.Examples.ShouldPass.Partial.ShiftRTooLarge   as Pass.ShiftRTooLarge
 import qualified Copilot.Verifier.Examples.ShouldPass.Partial.SubSignedWrap    as Pass.SubSignedWrap
 import qualified Copilot.Verifier.Examples.ShouldPass.Structs                  as Structs
+import qualified Copilot.Verifier.Examples.ShouldPass.UpdateArray              as UpdateArray
 import qualified Copilot.Verifier.Examples.ShouldPass.Voting                   as Voting
 import qualified Copilot.Verifier.Examples.ShouldPass.WCV                      as WCV
 
@@ -72,6 +73,7 @@ shouldPassExamples verb = Map.fromList
     , example "Heater" (Heater.verifySpec verb)
     , example "IntOps" (IntOps.verifySpec verb)
     , example "Structs" (Structs.verifySpec verb)
+    , example "UpdateArray" (UpdateArray.verifySpec verb)
     , example "Voting" (Voting.verifySpec verb)
     , example "WCV" (WCV.verifySpec verb)
 
