@@ -12,7 +12,7 @@ RUN wget https://downloads.haskell.org/~ghcup/$GHCUP_VER/x86_64-linux-ghcup-$GHC
 
 ENV PATH=/root/bsc/bin:/root/.cabal/bin:/root/.ghcup/bin:$PATH
 
-ENV GHC_VER=9.2.8
+ENV GHC_VER=9.4.8
 ENV CABAL_VER=3.8.1.0
 RUN ghcup install ghc $GHC_VER && \
     ghcup set ghc $GHC_VER && \

@@ -23,8 +23,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-22.04]
-        ghc-version: ["8.10.7", "9.2.8", "9.4.8"]
-        cabal: [ '3.10.2.0' ]
+        ghc-version: ["9.4.8", "9.6.6", "9.8.2"]
+        cabal: [ '3.10.3.0' ]
     steps:
       - uses: actions/checkout@v2
         with:
