@@ -79,7 +79,7 @@ import Lang.Crucible.FunctionHandle (newHandleAllocator)
 import Lang.Crucible.Simulator
   ( SimContext(..), ctxSymInterface, ExecResult(..), ExecState(..)
   , defaultAbortHandler, runOverrideSim, partialValue, gpValue
-  , GlobalVar, executeCrucible, OverrideSim, regValue
+  , GlobalVar, executeCrucible, OverrideSim, ovrWithBackend, regValue
   , readGlobal, modifyGlobal, callCFG, emptyRegMap, RegEntry(..)
   , AbortedResult(..)
   )
@@ -558,14 +558,15 @@ triggerOverride :: forall sym t arch msgs.
   CopilotLogRefs sym ->
   (Name, GlobalVar NatType, Pred sym) ->
   (Name, BoolExpr t, [(Some Type, CW4.XExpr sym)]) ->
-  OverrideTemplate (Crux sym) sym arch (RegEntry sym Mem) EmptyCtx Mem
+  OverrideTemplate (Crux sym) sym LLVM arch
 triggerOverride clRefs (_,triggerGlobal,_) (nm, _guard, args) =
    let args' = map toTypeRepr args in
    case Ctx.fromList args' of
      Some argCtx ->
       basic_llvm_override $
       LLVMOverride decl argCtx UnitRepr $
-        \memOps bak calledArgs ->
+        \memOps calledArgs ->
+          ovrWithBackend $ \bak ->
           do let sym = backendGetSym bak
              modifyGlobal triggerGlobal $ \count -> do
                -- See Note [Global variables for trigger functions]
@@ -648,7 +649,7 @@ executeStep :: forall sym arch msgs.
   L.Module ->
   ModuleTranslation arch ->
   [(Name, GlobalVar NatType, Pred sym)] ->
-  [OverrideTemplate (Crux sym) sym arch (RegEntry sym Mem) EmptyCtx Mem] ->
+  [OverrideTemplate (Crux sym) sym LLVM arch] ->
   [Pred sym] {- User-provided property assumptions -} ->
   [Pred sym] {- Side conditions related to partial operations -} ->
   IO (MemImpl sym)
@@ -703,7 +704,7 @@ executeStep opts csettings clRefs simctx memVar mem llvmmod modTrans triggerGlob
   runStep :: OverrideSim (Crux sym) sym LLVM (RegEntry sym Mem) EmptyCtx Mem (MemImpl sym)
   runStep =
     do -- set up built-in functions and trigger overrides
-       register_llvm_overrides llvmmod [] triggerOverrides llvm_ctx
+       _ <- register_llvm_overrides llvmmod [] triggerOverrides llvm_ctx
        -- set up functions defined in the module
        registerLazyModule sayTranslationWarning modTrans
 
