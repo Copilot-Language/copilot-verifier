@@ -29,7 +29,7 @@ prerequisites:
 * Ensure that you have the `cabal` and `ghc` executables in your `PATH`. If you
   don't already have them, we recommend using `ghcup` to install them:
   https://www.haskell.org/ghcup/. We recommend `Cabal` 3.10 or newer, and one of
-  GHC 8.10, 9.2, or 9.4.
+  GHC 9.4, 9.6, or 9.8.
 
 * Ensure that you have the `clang` and `llvm-link` utilities from LLVM in your
   `PATH`. Currently, LLVM versions up to 16 are supported. LLVM binaries are
