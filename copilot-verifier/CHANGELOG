@@ -1,3 +1,6 @@
+2024-08-03
+        * Support building with `crucible-llvm-0.7` and `crux-llvm-0.9`. (#64)
+
 2024-07-30
         * When using `Noisy` verbosity, always log proof goals related to the
           core correspondence proof, even if the goals are trivial. (#51)
