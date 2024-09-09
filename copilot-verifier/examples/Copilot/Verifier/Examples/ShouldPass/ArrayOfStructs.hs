@@ -17,7 +17,7 @@ instance Typed S where
   typeOf = Struct (S (Field 0))
 
 spec :: Spec
-spec = trigger "f" ((stream .!! 0)#field == 27) [arg stream]
+spec = trigger "f" ((stream ! 0)#field == 27) [arg stream]
   where
     stream :: Stream (Array 2 S)
     stream = [array [S (Field 27), S (Field 42)]] ++ stream

@@ -19,7 +19,7 @@ spec = do
       stream2 = extern "stream2" Nothing
 
   _ <- prop "withinBounds" (forAll (stream2 < constW32 2))
-  trigger "streamIndex" ((stream1 .!! stream2) == 1) [arg stream1, arg stream2]
+  trigger "streamIndex" ((stream1 ! stream2) == 1) [arg stream1, arg stream2]
 
 verifySpec :: Verbosity -> IO ()
 verifySpec verb = do
