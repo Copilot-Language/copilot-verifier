@@ -117,6 +117,7 @@ library copilot-verifier-examples
     Copilot.Verifier.Examples.ShouldPass.Partial.SubSignedWrap
     Copilot.Verifier.Examples.ShouldPass.Structs
     Copilot.Verifier.Examples.ShouldPass.UpdateArray
+    Copilot.Verifier.Examples.ShouldPass.UpdateStruct
     Copilot.Verifier.Examples.ShouldPass.Voting
     Copilot.Verifier.Examples.ShouldPass.WCV
 
