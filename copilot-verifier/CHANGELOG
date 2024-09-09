@@ -1,4 +1,5 @@
 2024-09-09
+        * Version bump (4.0). (#69)
         * Support verifying programs that use array updates. (#63)
         * Support verifying programs that use struct updates. (#57)
 
