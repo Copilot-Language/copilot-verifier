@@ -8,7 +8,7 @@ import Language.Copilot
 import qualified Prelude hiding ((++), (>))
 
 spec :: Spec
-spec = trigger "f" (stream .!! 0 > 0) [arg stream]
+spec = trigger "f" (stream ! 0 > 0) [arg stream]
   where
     stream :: Stream (Array 2 Int16)
     stream = [array [3,4]] ++ rest
