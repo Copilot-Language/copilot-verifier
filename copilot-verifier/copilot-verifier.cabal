@@ -1,6 +1,6 @@
 Cabal-version: 2.2
 Name:          copilot-verifier
-Version:       3.20
+Version:       4.0
 Author:        Galois Inc.
 Maintainer:    rscott@galois.com
 Copyright:     (c) Galois, Inc 2021-2024
