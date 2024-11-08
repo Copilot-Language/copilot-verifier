@@ -1,3 +1,6 @@
+2024-11-08
+        * Version bump (4.1). (#72)
+
 2024-09-09
         * Version bump (4.0). (#69)
         * Support verifying programs that use array updates. (#63)
