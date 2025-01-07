@@ -75,7 +75,7 @@ import Lang.Crucible.Backend
 import Lang.Crucible.Backend.Simple (newSimpleBackend)
 import Lang.Crucible.CFG.Core (AnyCFG(..), cfgArgTypes, cfgReturnType)
 import Lang.Crucible.CFG.Common ( freshGlobalVar )
-import Lang.Crucible.FunctionHandle (newHandleAllocator)
+import Lang.Crucible.FunctionHandle (HandleAllocator, newHandleAllocator)
 import Lang.Crucible.Simulator
   ( SimContext(..), ctxSymInterface, ExecResult(..), ExecState(..)
   , defaultAbortHandler, runOverrideSim, partialValue, gpValue
@@ -508,14 +508,12 @@ verifyStepBisimulation opts cruxOpts adapters csettings clRefs simctx llvmMod mo
         -- set up trigger guard global variables
         let halloc = simHandleAllocator simctx
         -- See Note [Global variables for trigger functions]
-        let prepTrigger (nm, guard, _) =
-              do gv <- freshGlobalVar halloc (Text.pack (nm ++ "_called")) NatRepr
-                 return (nm, gv, guard)
-        triggerGlobals <- mapM prepTrigger (CW4.triggerState prfbundle)
+        -- TODO RGS: Update me
+        triggers <- prepTriggers halloc (CW4.triggerState prfbundle)
 
         -- execute the step function
-        let overrides = zipWith (triggerOverride clRefs) triggerGlobals (CW4.triggerState prfbundle)
-        mem'' <- executeStep opts csettings clRefs simctx memVar mem' llvmMod modTrans triggerGlobals overrides (CW4.assumptions prfbundle) (CW4.sideConds prfbundle)
+        let overrides = map (triggerOverride clRefs) triggers
+        mem'' <- executeStep opts csettings clRefs simctx memVar mem' llvmMod modTrans triggers overrides (CW4.assumptions prfbundle) (CW4.sideConds prfbundle)
 
         -- assert the poststate is in the relation
         assertStateRelation bak clRefs mem''
@@ -536,7 +534,7 @@ verifyStepBisimulation opts cruxOpts adapters csettings clRefs simctx llvmMod mo
 --   the global is false, and is set to true when the trigger function
 --   is called.  At the end of verification, we check that the value
 --   of this global variable is true iff the corresponding trigger guard
---   condition is true.
+--   condition is true. (TODO RGS: Update me)
 --
 --   The other function of the trigger overrides is to check that, when called,
 --   the functions are given the expected argument values.
@@ -556,12 +554,11 @@ triggerOverride :: forall sym t arch msgs.
   HasLLVMAnn sym =>
 
   CopilotLogRefs sym ->
-  (Name, GlobalVar NatType, Pred sym) ->
-  (Name, BoolExpr t, [(Some Type, CW4.XExpr sym)]) ->
+  CopilotTrigger sym ->
   OverrideTemplate (Crux sym) sym LLVM arch
-triggerOverride clRefs (_,triggerGlobal,_) (nm, _guard, args) =
-   let args' = map toTypeRepr args in
-   case Ctx.fromList args' of
+-- triggerOverride = error "TODO RGS: Finish me"
+triggerOverride clRefs trigger =
+   case Ctx.fromList argTypeReprs of
      Some argCtx ->
       basic_llvm_override $
       LLVMOverride decl argCtx UnitRepr $
@@ -570,6 +567,7 @@ triggerOverride clRefs (_,triggerGlobal,_) (nm, _guard, args) =
           do let sym = backendGetSym bak
              modifyGlobal triggerGlobal $ \count -> do
                -- See Note [Global variables for trigger functions]
+               -- TODO RGS: Update me
                countPlusOne <- liftIO $ do
                  one <- natLit sym 1
                  natAdd sym count one
@@ -579,12 +577,23 @@ triggerOverride clRefs (_,triggerGlobal,_) (nm, _guard, args) =
              return ()
 
  where
+  CopilotTrigger
+    { ctName = nm
+    , ctGlobal = triggerGlobal
+    , ctInvocations = triggerInvs
+    } = trigger
+
+  -- TODO RGS: Why is it OK to use NE.head here?
+  headTriggerArgs = ctiArguments (NE.head triggerInvs)
+  argTypeReprs = map toTypeRepr headTriggerArgs
+  llvmArgTys = map llvmArgTy headTriggerArgs
+
   decl = L.Declare
          { L.decLinkage = Nothing
          , L.decVisibility = Nothing
          , L.decRetType = L.PrimType L.Void
          , L.decName = L.Symbol nm
-         , L.decArgs = map llvmArgTy args
+         , L.decArgs = llvmArgTys
          , L.decVarArgs = False
          , L.decAttrs = []
          , L.decComdat = Nothing
@@ -620,6 +629,45 @@ triggerOverride clRefs (_,triggerGlobal,_) (nm, _guard, args) =
          $ Log.TriggerArgumentEquality sym loc nm i ctp x tp v
        addDurableProofObligation bak (LabeledPred eq' (SimError loc rsn))
 
+-- | TODO RGS: Docs
+data CopilotTrigger sym = CopilotTrigger
+  { ctName :: Name
+  , ctGlobal :: GlobalVar NatType
+  , ctInvocations :: NonEmpty (CopilotTriggerInvocation sym)
+  }
+
+-- | TODO RGS: Docs
+data CopilotTriggerInvocation sym = CopilotTriggerInvocation
+  { ctiGuard :: Pred sym
+  , ctiArguments :: [(Some Type, CW4.XExpr sym)]
+  }
+
+-- | TODO RGS: Docs
+prepTriggers ::
+  HandleAllocator ->
+  [(Name, Pred sym, [(Some Type, CW4.XExpr sym)])] ->
+  IO [CopilotTrigger sym]
+prepTriggers halloc triggerState = do
+  let triggerState' =
+        map
+          (\(nm,guard,args) ->
+            let ti = CopilotTriggerInvocation
+                       { ctiGuard = guard
+                       , ctiArguments = args
+                       } in
+            (nm, ti :| []))
+          triggerState
+  let triggerInvocationsMap =
+        Map.fromListWith (<>) triggerState'
+  traverse
+    (\(nm, invs) -> do
+      gv <- freshGlobalVar halloc (Text.pack (nm ++ "_called")) NatRepr
+      pure $ CopilotTrigger
+        { ctName = nm
+        , ctGlobal = gv
+        , ctInvocations = invs
+        })
+    (Map.toList triggerInvocationsMap)
 
 -- | Actually execute the Crucible simulator on the generated "step" function.
 --   This will record proof side-conditions into the symbolic backend, and
@@ -648,13 +696,15 @@ executeStep :: forall sym arch msgs.
   MemImpl sym ->
   L.Module ->
   ModuleTranslation arch ->
-  [(Name, GlobalVar NatType, Pred sym)] ->
+  [CopilotTrigger sym] ->
   [OverrideTemplate (Crux sym) sym LLVM arch] ->
   [Pred sym] {- User-provided property assumptions -} ->
   [Pred sym] {- Side conditions related to partial operations -} ->
   IO (MemImpl sym)
-executeStep opts csettings clRefs simctx memVar mem llvmmod modTrans triggerGlobals triggerOverrides assums sideConds =
-  do globSt <- foldM setupTrigger (llvmGlobals memVar mem) triggerGlobals
+executeStep = error "TODO RGS: Finish me"
+{-
+executeStep opts csettings clRefs simctx memVar mem llvmmod modTrans triggers triggerOverrides assums sideConds =
+  do globSt <- foldM setupTrigger (llvmGlobals memVar mem) triggers
      let initSt = InitialState simctx globSt defaultAbortHandler memRepr $
                     runOverrideSim memRepr runStep
      res <- executeCrucible [] initSt
@@ -665,7 +715,9 @@ executeStep opts csettings clRefs simctx memVar mem llvmmod modTrans triggerGlob
 
  where
   -- See Note [Global variables for trigger functions]
-  setupTrigger gs (_,gv,_) = do
+  -- TODO RGS: Update me
+  setupTrigger gs trigger = do
+    let gv = ctGlobal trigger
     zero <- liftIO $ natLit sym 0
     pure $ insertGlobal gv zero gs
   llvm_ctx = modTrans ^. transContext
@@ -728,8 +780,13 @@ executeStep opts csettings clRefs simctx memVar mem llvmmod modTrans triggerGlob
        -- Assert that the trigger functions were called exactly once iff the
        -- associated guard condition was true.
        -- See Note [Global variables for trigger functions].
-       forM_ triggerGlobals $ \(nm, gv, guard) ->
-         do expectedCount <- liftIO $ do
+       -- TODO RGS: Update me
+       forM_ triggers $ \trigger ->
+         do let CopilotTrigger
+                  { ctName = nm
+                  , ctGlobal = gv
+                  } = trigger
+            expectedCount <- liftIO $ do
               one  <- natLit sym 1
               zero <- natLit sym 0
               natIte sym guard one zero
@@ -749,6 +806,7 @@ executeStep opts csettings clRefs simctx memVar mem llvmmod modTrans triggerGlob
 
        -- return the final state of the memory
        readGlobal memVar
+-}
 
 -- | Given a bisimulation proof bundle and an empty initial state,
 --   populate the global ring-buffer variables with abstract state
@@ -1227,6 +1285,8 @@ from a `PtrRepr` in `computeEqualVals` to handle structs.
 
 See Note [Global variables for trigger functions]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+TODO RGS: Update me
+
 As part of verifying that the behavior of a Copilot specification's trigger
 functions behave the same way as the trigger functions in the corresponding C
 program, we check that each trigger function in the C program is invoked the
