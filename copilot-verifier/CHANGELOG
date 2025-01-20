@@ -1,3 +1,6 @@
+2025-01-20
+        * Reject specs that use multiple triggers with the same name. (#74)
+
 2024-11-08
         * Version bump (4.1). (#72)
 
