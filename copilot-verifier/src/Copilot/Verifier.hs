@@ -23,7 +23,7 @@ module Copilot.Verifier
   ) where
 
 import Control.Lens (view, (^.), to)
-import Control.Monad (foldM, forM_, when)
+import Control.Monad (foldM, forM_, unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State (execStateT, lift, StateT(..))
 import Data.Aeson (ToJSON)
@@ -33,7 +33,7 @@ import qualified Data.Text as Text
 import qualified Data.Map.Strict as Map
 import Data.IORef (newIORef, modifyIORef', readIORef, IORef)
 import qualified Text.LLVM.AST as L
-import Data.List (genericLength)
+import Data.List (genericLength, sort)
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Vector as V
@@ -511,10 +511,26 @@ verifyStepBisimulation opts cruxOpts adapters csettings clRefs simctx llvmMod mo
         let prepTrigger (nm, guard, _) =
               do gv <- freshGlobalVar halloc (Text.pack (nm ++ "_called")) NatRepr
                  return (nm, gv, guard)
-        triggerGlobals <- mapM prepTrigger (CW4.triggerState prfbundle)
+
+            checkDuplicateTriggerNames :: [Name] -> IO ()
+            checkDuplicateTriggerNames triggers =
+              traverse_ checkDuplicateTriggerName $ NE.group $ sort triggers
+
+            checkDuplicateTriggerName :: NonEmpty Name -> IO ()
+            checkDuplicateTriggerName (trig :| dupTrigs) =
+              unless (null dupTrigs) $
+                fail $ unlines
+                  [ "The specification invokes the `" ++ trig ++
+                    "` trigger function multiple times,"
+                  , "which copilot-verifier does not currently support."
+                  , "See https://github.com/Copilot-Language/copilot-verifier/issues/74."
+                  ]
+        let triggerState = CW4.triggerState prfbundle
+        checkDuplicateTriggerNames $ map (\(nm,_,_) -> nm) triggerState
+        triggerGlobals <- mapM prepTrigger triggerState
 
         -- execute the step function
-        let overrides = zipWith (triggerOverride clRefs) triggerGlobals (CW4.triggerState prfbundle)
+        let overrides = zipWith (triggerOverride clRefs) triggerGlobals triggerState
         mem'' <- executeStep opts csettings clRefs simctx memVar mem' llvmMod modTrans triggerGlobals overrides (CW4.assumptions prfbundle) (CW4.sideConds prfbundle)
 
         -- assert the poststate is in the relation
