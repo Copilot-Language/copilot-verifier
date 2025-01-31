@@ -38,6 +38,13 @@ prerequisites:
 * Ensure that you have the `z3` SMT solver in your `PATH`. `z3` binaries are
   available at https://github.com/Z3Prover/z3/releases.
 
+  Alternatively, the verifier can be configured to use one of the following
+  SMT solvers instead:
+
+  * `cvc4`: https://cvc4.github.io/downloads.html
+  * `cvc5`: https://github.com/cvc5/cvc5/releases/
+  * `yices`: https://yices.csl.sri.com
+
 Then, clone the repo and run:
 
 ```

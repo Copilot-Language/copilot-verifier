@@ -71,6 +71,7 @@ library
   exposed-modules:
     Copilot.Verifier
     Copilot.Verifier.Log
+    Copilot.Verifier.Solver
 
 library copilot-verifier-examples
   import: bldflags
