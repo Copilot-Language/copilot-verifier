@@ -50,6 +50,7 @@ import qualified Copilot.Core.Type as CT
 import qualified Copilot.Theorem.What4 as CW4
 
 import qualified Copilot.Verifier.Log as Log
+import qualified Copilot.Verifier.Solver as Solver
 
 import Data.Parameterized.Ctx (EmptyCtx)
 import Data.Parameterized.Context (pattern Empty)
@@ -160,7 +161,6 @@ import What4.InterpretedFloatingPoint
   )
 import What4.ProgramLoc (ProgramLoc, mkProgramLoc, plFunction, Position(..))
 import What4.Solver.Adapter (SolverAdapter(..))
-import What4.Solver.Z3 (z3Adapter)
 import What4.Symbol (safeSymbol)
 
 -- | @'verify' csettings props prefix spec@ verifies the Copilot specification
@@ -202,6 +202,8 @@ data VerifierOptions = VerifierOptions
     -- * @<solver>@ is the name of the SMT solver used to discharge the proof
     --   goal. Currently, this will always be @z3@, although we might make this
     --   configurable in the future.
+  , smtSolver :: Solver.Solver
+    -- ^ Which SMT solver to use when solving proof goals.
   } deriving stock Show
 
 -- | The default 'VerifierOptions':
@@ -212,11 +214,14 @@ data VerifierOptions = VerifierOptions
 -- * Do not assume any side conditions related to partial operations.
 --
 -- * Do not log any SMT solver interactions.
+--
+-- * Use the Z3 SMT solver.
 defaultVerifierOptions :: VerifierOptions
 defaultVerifierOptions = VerifierOptions
   { verbosity = Default
   , assumePartialSideConds = False
   , logSmtInteractions = False
+  , smtSolver = Solver.Z3
   }
 
 -- | Like 'defaultVerifierOptions', except that the verifier will assume side
@@ -332,7 +337,8 @@ verifyBitcode ::
 verifyBitcode opts csettings properties spec cruxOpts llvmOpts cFile bcFile =
   do -- Set up the expression builder and symbolic backend
      halloc <- newHandleAllocator
-     sym <- newExprBuilder FloatUninterpretedRepr CopilotVerifierData globalNonceGenerator
+     (sym :: ExprBuilder t st fs) <-
+       newExprBuilder FloatUninterpretedRepr CopilotVerifierData globalNonceGenerator
      bak <- newSimpleBackend sym
      -- turn on hash-consing
      startCaching sym
@@ -341,9 +347,10 @@ verifyBitcode opts csettings properties spec cruxOpts llvmOpts cFile bcFile =
      clRefs <- newCopilotLogRefs
      let ?recordLLVMAnnotation = recordLLVMAnnotation clRefs
 
-     -- Set up the solver to use for verification.  Right now we hard-code this to Z3.
-     let adapters = [z3Adapter] -- TODO? configurable
-     extendConfig (solver_adapter_config_options z3Adapter) (getConfiguration sym)
+     -- Set up the solver to use for verification.
+     let adapter :: SolverAdapter st
+         adapter = Solver.solverAdapter (smtSolver opts)
+     extendConfig (solver_adapter_config_options adapter) (getConfiguration sym)
 
      -- Set up the Crucible/LLVM simulation context
      memVar <- mkMemVar "llvm_memory" halloc
@@ -386,13 +393,13 @@ verifyBitcode opts csettings properties spec cruxOpts llvmOpts cFile bcFile =
           -- segment of the associated Copilot streams.
           let cruxOptsInit = setCruxOfflineSolverOutput "initial-step" cruxOpts
           initGoals <-
-            verifyInitialState cruxOptsInit adapters clRefs simctx initialMem
+            verifyInitialState cruxOptsInit [adapter] clRefs simctx initialMem
               (CW4.initialStreamState proofStateBundle)
 
           -- Now, the real meat. Carry out the bisimulation step of the proof.
           let cruxOptsTrans = setCruxOfflineSolverOutput "transition-step" cruxOpts
           bisimGoals <-
-            verifyStepBisimulation opts cruxOptsTrans adapters csettings
+            verifyStepBisimulation opts cruxOptsTrans [adapter] csettings
               clRefs simctx llvmMod trans memVar initialMem proofStateBundle
 
           Log.sayCopilot $ Log.SuccessfulProofSummary cFile initGoals bisimGoals
