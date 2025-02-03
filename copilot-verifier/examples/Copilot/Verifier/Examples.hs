@@ -28,6 +28,7 @@ import qualified Copilot.Verifier.Examples.ShouldPass.Arith                    a
 import qualified Copilot.Verifier.Examples.ShouldPass.Clock                    as Clock
 import qualified Copilot.Verifier.Examples.ShouldPass.Counter                  as Counter
 import qualified Copilot.Verifier.Examples.ShouldPass.Engine                   as Engine
+import qualified Copilot.Verifier.Examples.ShouldPass.FPNegation               as FPNegation
 import qualified Copilot.Verifier.Examples.ShouldPass.FPOps                    as FPOps
 import qualified Copilot.Verifier.Examples.ShouldPass.Heater                   as Heater
 import qualified Copilot.Verifier.Examples.ShouldPass.IntOps                   as IntOps
@@ -70,6 +71,7 @@ shouldPassExamples verb = Map.fromList
     , example "Clock" (Clock.verifySpec verb)
     , example "Counter" (Counter.verifySpec verb)
     , example "Engine" (Engine.verifySpec verb)
+    , example "FPNegation" (FPNegation.verifySpec verb)
     , example "FPOps" (FPOps.verifySpec verb)
     , example "Heater" (Heater.verifySpec verb)
     , example "IntOps" (IntOps.verifySpec verb)

@@ -70,6 +70,7 @@ library
   hs-source-dirs: src
   exposed-modules:
     Copilot.Verifier
+    Copilot.Verifier.FloatMode
     Copilot.Verifier.Log
     Copilot.Verifier.Solver
 
@@ -81,6 +82,7 @@ library copilot-verifier-examples
     case-insensitive,
     copilot >= 4.2 && < 4.3,
     copilot-language >= 4.2 && < 4.3,
+    copilot-libraries >= 4.2 && < 4.3,
     copilot-prettyprinter >= 4.2 && < 4.3,
     copilot-verifier
   exposed-modules:
@@ -104,6 +106,7 @@ library copilot-verifier-examples
     Copilot.Verifier.Examples.ShouldPass.Clock
     Copilot.Verifier.Examples.ShouldPass.Counter
     Copilot.Verifier.Examples.ShouldPass.Engine
+    Copilot.Verifier.Examples.ShouldPass.FPNegation
     Copilot.Verifier.Examples.ShouldPass.FPOps
     Copilot.Verifier.Examples.ShouldPass.Heater
     Copilot.Verifier.Examples.ShouldPass.IntOps
