@@ -3,6 +3,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE ExplicitNamespaces #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ImplicitParams #-}
@@ -49,6 +50,7 @@ import qualified Copilot.Core.Type as CT
 
 import qualified Copilot.Theorem.What4 as CW4
 
+import qualified Copilot.Verifier.FloatMode as FloatMode
 import qualified Copilot.Verifier.Log as Log
 import qualified Copilot.Verifier.Solver as Solver
 
@@ -73,10 +75,10 @@ import Lang.Crucible.Backend
   , labeledPred, labeledPredMsg
   -- , ProofObligations, proofGoal, goalsToList, labeledPredMsg
   )
-import Lang.Crucible.Backend.Simple (newSimpleBackend)
+import Lang.Crucible.Backend.Simple (SimpleBackend, newSimpleBackend)
 import Lang.Crucible.CFG.Core (AnyCFG(..), cfgArgTypes, cfgReturnType)
 import Lang.Crucible.CFG.Common ( freshGlobalVar )
-import Lang.Crucible.FunctionHandle (newHandleAllocator)
+import Lang.Crucible.FunctionHandle (HandleAllocator, newHandleAllocator)
 import Lang.Crucible.Simulator
   ( SimContext(..), ctxSymInterface, ExecResult(..), ExecState(..)
   , defaultAbortHandler, runOverrideSim, partialValue, gpValue
@@ -151,7 +153,7 @@ import What4.Interface
   , getAnnotation, natAdd, natEq, natIte, natLit
   )
 import What4.Expr.Builder
-  ( FloatModeRepr(..), ExprBuilder, BoolExpr, startCaching
+  ( Flags, ExprBuilder, BoolExpr, startCaching
   , newExprBuilder
   )
 import What4.FunctionName (functionName)
@@ -204,6 +206,20 @@ data VerifierOptions = VerifierOptions
     --   configurable in the future.
   , smtSolver :: Solver.Solver
     -- ^ Which SMT solver to use when solving proof goals.
+  , smtFloatMode :: FloatMode.FloatMode
+    -- ^ How the verifier should interpret floating-point operations when
+    -- translating them to SMT.
+    --
+    -- By default, the verifier will treat all floating-point operations as
+    -- uninterpreted functions ('FloatMode.FloatUninterpreted'). This allows the
+    -- verifier to perform some limited reasoning about floating-point
+    -- operations that SMT solvers do not have built-in operations for (@sin@,
+    -- @cos@, @tan@, etc.), but at the expense of not being able to verify C
+    -- code in which the compiler optimizes floating-point expressions. One can
+    -- also opt into an alternative mode where floating-point values are treated
+    -- as IEEE-754 floats ('FloatMode.FloatIEEE'), but this comes with the
+    -- drawback that the verifier will not be able to perform /any/ reasoning
+    -- about @sin@, @cos@, @tan@, etc.
   } deriving stock Show
 
 -- | The default 'VerifierOptions':
@@ -216,12 +232,16 @@ data VerifierOptions = VerifierOptions
 -- * Do not log any SMT solver interactions.
 --
 -- * Use the Z3 SMT solver.
+--
+-- * Treat all floating-point operations as uninterpreted functions when
+--   translating to SMT.
 defaultVerifierOptions :: VerifierOptions
 defaultVerifierOptions = VerifierOptions
   { verbosity = Default
   , assumePartialSideConds = False
   , logSmtInteractions = False
   , smtSolver = Solver.Z3
+  , smtFloatMode = FloatMode.FloatUninterpreted
   }
 
 -- | Like 'defaultVerifierOptions', except that the verifier will assume side
@@ -335,86 +355,97 @@ verifyBitcode ::
   FilePath    {- ^ Path to the bitcode file to verify -} ->
   IO ()
 verifyBitcode opts csettings properties spec cruxOpts llvmOpts cFile bcFile =
+  FloatMode.withFloatMode (smtFloatMode opts) $ \fm ->
   do -- Set up the expression builder and symbolic backend
      halloc <- newHandleAllocator
-     (sym :: ExprBuilder t st fs) <-
-       newExprBuilder FloatUninterpretedRepr CopilotVerifierData globalNonceGenerator
+     sym <- newExprBuilder fm CopilotVerifierData globalNonceGenerator
      bak <- newSimpleBackend sym
      -- turn on hash-consing
      startCaching sym
 
-     -- capture LLVM side-condition information for use in error reporting
-     clRefs <- newCopilotLogRefs
-     let ?recordLLVMAnnotation = recordLLVMAnnotation clRefs
-
-     -- Set up the solver to use for verification.
-     let adapter :: SolverAdapter st
-         adapter = Solver.solverAdapter (smtSolver opts)
-     extendConfig (solver_adapter_config_options adapter) (getConfiguration sym)
-
-     -- Set up the Crucible/LLVM simulation context
-     memVar <- mkMemVar "llvm_memory" halloc
-     let simctx = (setupSimCtxt halloc bak (memOpts llvmOpts) memVar)
-                  { printHandle = view Log.outputHandle ?outputConfig }
-
-     -- Load and translate the input LLVM module
-     llvmMod <- parseLLVM bcFile
-     Some trans <-
-        let ?transOpts = transOpts llvmOpts
-         in translateModule halloc memVar llvmMod
-
-     Log.sayCopilot Log.TranslatedToCrucible
-
-     -- Grab some metadata from the bitcode file and options;
-     -- make the available via implicit arguments to the places
-     -- that expect them.
-     let llvmCtxt = trans ^. transContext
-     let ?lc = llvmCtxt ^. llvmTypeCtx
-     let ?memOpts = memOpts llvmOpts
-     let ?intrinsicsOpts = intrinsicsOpts llvmOpts
-
-     llvmPtrWidth llvmCtxt $ \ptrW ->
-       withPtrWidth ptrW $
-
-       do -- Compute the LLVM memory state with global variables allocated
-          -- but not initialized
-          emptyMem   <- initializeAllMemory bak llvmCtxt llvmMod
-
-          -- Compute the LLVM memory state with global variables initialized
-          -- to their initial values.
-          initialMem <- populateAllGlobals bak (trans ^. globalInitMap) emptyMem
-
-          -- Use the Copilot spec directly to compute the symbolic states
-          -- necessary to carry out the states of the bisimulation proof.
-          Log.sayCopilot Log.GeneratingProofState
-          proofStateBundle <- CW4.computeBisimulationProofBundle sym properties spec
-
-          -- First check that the initial state of the program matches the starting
-          -- segment of the associated Copilot streams.
-          let cruxOptsInit = setCruxOfflineSolverOutput "initial-step" cruxOpts
-          initGoals <-
-            verifyInitialState cruxOptsInit [adapter] clRefs simctx initialMem
-              (CW4.initialStreamState proofStateBundle)
-
-          -- Now, the real meat. Carry out the bisimulation step of the proof.
-          let cruxOptsTrans = setCruxOfflineSolverOutput "transition-step" cruxOpts
-          bisimGoals <-
-            verifyStepBisimulation opts cruxOptsTrans [adapter] csettings
-              clRefs simctx llvmMod trans memVar initialMem proofStateBundle
-
-          Log.sayCopilot $ Log.SuccessfulProofSummary cFile initGoals bisimGoals
-          -- We only want to inform users about Noisy if the verbosity level is
-          -- sufficiently low. Crux's logging framework isn't particularly
-          -- suited to doing this, as it assumes that all log messages enabled
-          -- for low verbosity levels should also be enabled for higher
-          -- verbosity levels. That is a reasonable assumption most of the time,
-          -- but not here.
-          --
-          -- To compensate, we hack around the issue by manually checking the
-          -- verbosity level before logging the message.
-          when (verbosity opts < Noisy) $
-            Log.sayCopilot Log.NoisyVerbositySuggestion
+     FloatMode.withInterpretedFloatExprBuilder sym fm $
+       verifyWithSymBackend bak halloc
   where
+    verifyWithSymBackend ::
+      forall t st fm.
+      IsInterpretedFloatExprBuilder (ExprBuilder t st (Flags fm)) =>
+      SimpleBackend t st (Flags fm) ->
+      HandleAllocator ->
+      IO ()
+    verifyWithSymBackend bak halloc = do
+      let sym = backendGetSym bak
+      -- capture LLVM side-condition information for use in error reporting
+      clRefs <- newCopilotLogRefs
+      let ?recordLLVMAnnotation = recordLLVMAnnotation clRefs
+
+      -- Set up the solver to use for verification.
+      let adapter :: SolverAdapter st
+          adapter = Solver.solverAdapter (smtSolver opts)
+      extendConfig (solver_adapter_config_options adapter) (getConfiguration sym)
+
+      -- Set up the Crucible/LLVM simulation context
+      memVar <- mkMemVar "llvm_memory" halloc
+      let simctx = (setupSimCtxt halloc bak (memOpts llvmOpts) memVar)
+                   { printHandle = view Log.outputHandle ?outputConfig }
+
+      -- Load and translate the input LLVM module
+      llvmMod <- parseLLVM bcFile
+      Some trans <-
+         let ?transOpts = transOpts llvmOpts
+          in translateModule halloc memVar llvmMod
+
+      Log.sayCopilot Log.TranslatedToCrucible
+
+      -- Grab some metadata from the bitcode file and options;
+      -- make the available via implicit arguments to the places
+      -- that expect them.
+      let llvmCtxt = trans ^. transContext
+      let ?lc = llvmCtxt ^. llvmTypeCtx
+      let ?memOpts = memOpts llvmOpts
+      let ?intrinsicsOpts = intrinsicsOpts llvmOpts
+
+      llvmPtrWidth llvmCtxt $ \ptrW ->
+        withPtrWidth ptrW $
+
+        do -- Compute the LLVM memory state with global variables allocated
+           -- but not initialized
+           emptyMem   <- initializeAllMemory bak llvmCtxt llvmMod
+
+           -- Compute the LLVM memory state with global variables initialized
+           -- to their initial values.
+           initialMem <- populateAllGlobals bak (trans ^. globalInitMap) emptyMem
+
+           -- Use the Copilot spec directly to compute the symbolic states
+           -- necessary to carry out the states of the bisimulation proof.
+           Log.sayCopilot Log.GeneratingProofState
+           proofStateBundle <- CW4.computeBisimulationProofBundle sym properties spec
+
+           -- First check that the initial state of the program matches the starting
+           -- segment of the associated Copilot streams.
+           let cruxOptsInit = setCruxOfflineSolverOutput "initial-step" cruxOpts
+           initGoals <-
+             verifyInitialState cruxOptsInit [adapter] clRefs simctx initialMem
+               (CW4.initialStreamState proofStateBundle)
+
+           -- Now, the real meat. Carry out the bisimulation step of the proof.
+           let cruxOptsTrans = setCruxOfflineSolverOutput "transition-step" cruxOpts
+           bisimGoals <-
+             verifyStepBisimulation opts cruxOptsTrans [adapter] csettings
+               clRefs simctx llvmMod trans memVar initialMem proofStateBundle
+
+           Log.sayCopilot $ Log.SuccessfulProofSummary cFile initGoals bisimGoals
+           -- We only want to inform users about Noisy if the verbosity level is
+           -- sufficiently low. Crux's logging framework isn't particularly
+           -- suited to doing this, as it assumes that all log messages enabled
+           -- for low verbosity levels should also be enabled for higher
+           -- verbosity levels. That is a reasonable assumption most of the time,
+           -- but not here.
+           --
+           -- To compensate, we hack around the issue by manually checking the
+           -- verbosity level before logging the message.
+           when (verbosity opts < Noisy) $
+             Log.sayCopilot Log.NoisyVerbositySuggestion
+
     -- If @logSmtInteractions@ is enabled, enable offline solver output in the
     -- supplied 'CruxOptions' with the supplied file template. Otherwise, return
     -- the supplied 'CruxOptions' unaltered.
