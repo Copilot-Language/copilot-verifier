@@ -1014,7 +1014,7 @@ copilotExprToRegValue sym = loop
     loop (CW4.XFloat x)  (FloatRepr SingleFloatRepr) = return x
     loop (CW4.XDouble x) (FloatRepr DoubleFloatRepr) = return x
 
-    loop CW4.XEmptyArray (VectorRepr _tpr) =
+    loop (CW4.XEmptyArray _ctp) (VectorRepr _tpr) =
       pure V.empty
     loop (CW4.XArray xs) (VectorRepr tpr) =
       V.generateM (PVec.lengthInt xs) (\i -> loop (PVec.elemAtUnsafe i xs) tpr)
@@ -1075,7 +1075,7 @@ computeEqualVals bak clRefs mem = loop
     loop Float (CW4.XFloat x)  (FloatRepr SingleFloatRepr) v = iFloatEq @_ @SingleFloat sym x v
     loop Double (CW4.XDouble x) (FloatRepr DoubleFloatRepr) v = iFloatEq @_ @DoubleFloat sym x v
 
-    loop (Array _ctp) CW4.XEmptyArray (VectorRepr _tpr) vs =
+    loop (Array _ctp) (CW4.XEmptyArray _ctp2) (VectorRepr _tpr) vs =
       pure $ backendPred sym $ V.null vs
     loop (Array ctp) (CW4.XArray xs) (VectorRepr tpr) vs
       | PVec.lengthInt xs == V.length vs

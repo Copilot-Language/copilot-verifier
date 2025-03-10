@@ -799,7 +799,7 @@ ppCopilotValue val =
     CW4.XWord64 w -> WI.printSymExpr w
     CW4.XFloat  f -> WI.printSymExpr f
     CW4.XDouble d -> WI.printSymExpr d
-    CW4.XEmptyArray -> "[]"
+    CW4.XEmptyArray {} -> "[]"
     CW4.XArray  a   -> ppBracesWith ppCopilotValue (PV.toList a)
     CW4.XStruct s   -> ppBracketsWith ppCopilotValue s
 
